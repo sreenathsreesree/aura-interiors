@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { Sheet, Button, NumberStepper } from '@/components/ui'
 import { cn } from '@/lib/cn'
-import { useAppStore } from '@/store/useAppStore'
 import type { DiscountType, PricingConfig } from '@/types'
 
 const DISCOUNT_OPTIONS: { type: DiscountType; label: string }[] = [
@@ -10,23 +9,33 @@ const DISCOUNT_OPTIONS: { type: DiscountType; label: string }[] = [
   { type: 'fixed', label: 'Fixed Amount' },
 ]
 
-interface PricingSettingsSheetProps {
+interface PricingConfigSheetProps {
   open: boolean
   onClose: () => void
-  projectId: string
   pricing: PricingConfig
+  onSave: (pricing: PricingConfig) => void
+  title?: string
+  subtitle?: string
 }
 
-export function PricingSettingsSheet({ open, onClose, projectId, pricing }: PricingSettingsSheetProps) {
-  const updateProjectPricing = useAppStore((s) => s.updateProjectPricing)
-
+// Shared markup/discount/GST editor — used for a project's own pricing
+// config and, independently, for a quotation's own copy of it, so neither
+// consumer duplicates the calculation-flow UI.
+export function PricingConfigSheet({
+  open,
+  onClose,
+  pricing,
+  onSave,
+  title = 'Pricing Settings',
+  subtitle = 'Subtotal → markup → discount → GST → grand total.',
+}: PricingConfigSheetProps) {
   const [markupPercent, setMarkupPercent] = useState(pricing.markupPercent)
   const [discountType, setDiscountType] = useState<DiscountType>(pricing.discountType)
   const [discountValue, setDiscountValue] = useState(pricing.discountValue)
   const [taxRatePercent, setTaxRatePercent] = useState(pricing.taxRatePercent)
 
   function handleClose() {
-    // Discard any unsaved edits by resetting to the project's current values.
+    // Discard any unsaved edits by resetting to the current values.
     setMarkupPercent(pricing.markupPercent)
     setDiscountType(pricing.discountType)
     setDiscountValue(pricing.discountValue)
@@ -35,7 +44,7 @@ export function PricingSettingsSheet({ open, onClose, projectId, pricing }: Pric
   }
 
   function handleSave() {
-    updateProjectPricing(projectId, {
+    onSave({
       markupPercent,
       discountType,
       discountValue: discountType === 'none' ? 0 : discountValue,
@@ -48,8 +57,8 @@ export function PricingSettingsSheet({ open, onClose, projectId, pricing }: Pric
     <Sheet
       open={open}
       onClose={handleClose}
-      title="Pricing Settings"
-      subtitle="Applies across every room in this project."
+      title={title}
+      subtitle={subtitle}
       footer={
         <Button fullWidth size="xl" onClick={handleSave}>
           Save Pricing
@@ -57,13 +66,7 @@ export function PricingSettingsSheet({ open, onClose, projectId, pricing }: Pric
       }
     >
       <div className="flex flex-col gap-5 py-2">
-        <NumberStepper
-          label="Markup"
-          value={markupPercent}
-          onChange={setMarkupPercent}
-          step={1}
-          suffix="%"
-        />
+        <NumberStepper label="Markup" value={markupPercent} onChange={setMarkupPercent} step={1} suffix="%" />
 
         <div>
           <span className="mb-1.5 block text-sm font-semibold text-ink-700">Discount</span>
@@ -95,13 +98,7 @@ export function PricingSettingsSheet({ open, onClose, projectId, pricing }: Pric
           />
         )}
 
-        <NumberStepper
-          label="GST / Tax Rate"
-          value={taxRatePercent}
-          onChange={setTaxRatePercent}
-          step={1}
-          suffix="%"
-        />
+        <NumberStepper label="GST / Tax Rate" value={taxRatePercent} onChange={setTaxRatePercent} step={1} suffix="%" />
       </div>
     </Sheet>
   )

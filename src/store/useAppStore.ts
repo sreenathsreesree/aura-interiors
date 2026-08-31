@@ -4,6 +4,8 @@ import type {
   Client,
   PricingConfig,
   Project,
+  Quotation,
+  QuotationItem,
   Room,
   RoomItem,
   RoomRequirement,
@@ -11,8 +13,16 @@ import type {
 } from '@/types'
 import { SAMPLE_CLIENTS, SAMPLE_PROJECTS, SAMPLE_ROOMS } from '@/data/sampleData'
 import { CATALOGUE_ITEMS } from '@/data/catalogue'
+import { AURA_COMPANY_PROFILE } from '@/data/company'
+import { DEFAULT_PAYMENT_MILESTONES, DEFAULT_TERMS_AND_CONDITIONS } from '@/data/quotationDefaults'
 import { getRoomTypeOption } from '@/data/roomTypes'
+import { buildProjectBoqLines } from '@/lib/pricing'
+import { generateQuotationNumber } from '@/lib/quotation'
 import { generateId } from '@/lib/id'
+
+function todayIso(): string {
+  return new Date().toISOString().slice(0, 10)
+}
 
 interface AppState {
   clients: Client[]
@@ -42,12 +52,28 @@ interface AppState {
   addCatalogueItem: (item: Omit<CatalogueItem, 'id'>) => CatalogueItem
   updateCatalogueItem: (itemId: string, updates: Partial<Omit<CatalogueItem, 'id'>>) => void
   setCatalogueItemActive: (itemId: string, isActive: boolean) => void
+
+  // Quotations
+  quotations: Quotation[]
+  createQuotationFromBoq: (projectId: string) => Quotation | undefined
+  updateQuotation: (
+    quotationId: string,
+    updates: Partial<Omit<Quotation, 'id' | 'projectId' | 'clientId' | 'items' | 'createdAt'>>,
+  ) => void
+  updateQuotationItem: (
+    quotationId: string,
+    itemId: string,
+    updates: Partial<Omit<QuotationItem, 'id'>>,
+  ) => void
+  setQuotationRoomIncluded: (quotationId: string, roomId: string, isIncluded: boolean) => void
+  moveQuotationItem: (quotationId: string, itemId: string, direction: 'up' | 'down') => void
 }
 
-export const useAppStore = create<AppState>((set) => ({
+export const useAppStore = create<AppState>((set, get) => ({
   clients: SAMPLE_CLIENTS,
   projects: SAMPLE_PROJECTS,
   rooms: SAMPLE_ROOMS,
+  quotations: [],
   catalogueItems: CATALOGUE_ITEMS,
 
   addClient: (client) => {
@@ -212,6 +238,113 @@ export const useAppStore = create<AppState>((set) => ({
       catalogueItems: state.catalogueItems.map((item) =>
         item.id === itemId ? { ...item, isActive } : item,
       ),
+    }))
+  },
+
+  createQuotationFromBoq: (projectId) => {
+    const state = get()
+    const project = state.projects.find((p) => p.id === projectId)
+    if (!project) return undefined
+    const rooms = state.rooms.filter((r) => r.projectId === projectId)
+    const lines = buildProjectBoqLines(rooms, project.pricing)
+    if (lines.length === 0) return undefined
+
+    const client = state.clients.find((c) => c.id === project.clientId)
+    const now = new Date()
+    const issueDate = todayIso()
+    const validUntilDate = new Date(now)
+    validUntilDate.setDate(validUntilDate.getDate() + 30)
+    const validUntil = validUntilDate.toISOString().slice(0, 10)
+
+    const items: QuotationItem[] = lines.map((line) => ({
+      id: generateId('qi'),
+      roomId: line.roomId,
+      roomName: line.roomName,
+      sourceItemId: line.itemId,
+      category: line.category,
+      name: line.name,
+      description: line.description,
+      quantity: line.quantity,
+      unit: line.unit,
+      rate: line.rate,
+      sourceRate: line.rate,
+      isIncluded: true,
+      isOptional: false,
+    }))
+
+    const quotation: Quotation = {
+      id: generateId('qt'),
+      projectId,
+      clientId: project.clientId,
+      quotationNumber: generateQuotationNumber(state.quotations, now),
+      revision: 1,
+      status: 'draft',
+      issueDate,
+      validUntil,
+      clientName: client?.name ?? 'Client',
+      projectName: project.name,
+      projectLocation: project.address,
+      company: { ...AURA_COMPANY_PROFILE },
+      items,
+      pricing: { ...project.pricing },
+      paymentMilestones: DEFAULT_PAYMENT_MILESTONES.map((m) => ({ ...m, id: generateId('pm') })),
+      termsAndConditions: [...DEFAULT_TERMS_AND_CONDITIONS],
+      notes: '',
+      createdAt: issueDate,
+      updatedAt: issueDate,
+    }
+
+    set((s) => ({ quotations: [quotation, ...s.quotations] }))
+    return quotation
+  },
+
+  updateQuotation: (quotationId, updates) => {
+    set((state) => ({
+      quotations: state.quotations.map((q) =>
+        q.id === quotationId ? { ...q, ...updates, updatedAt: todayIso() } : q,
+      ),
+    }))
+  },
+
+  updateQuotationItem: (quotationId, itemId, updates) => {
+    set((state) => ({
+      quotations: state.quotations.map((q) =>
+        q.id === quotationId
+          ? {
+              ...q,
+              items: q.items.map((item) => (item.id === itemId ? { ...item, ...updates } : item)),
+              updatedAt: todayIso(),
+            }
+          : q,
+      ),
+    }))
+  },
+
+  setQuotationRoomIncluded: (quotationId, roomId, isIncluded) => {
+    set((state) => ({
+      quotations: state.quotations.map((q) =>
+        q.id === quotationId
+          ? {
+              ...q,
+              items: q.items.map((item) => (item.roomId === roomId ? { ...item, isIncluded } : item)),
+              updatedAt: todayIso(),
+            }
+          : q,
+      ),
+    }))
+  },
+
+  moveQuotationItem: (quotationId, itemId, direction) => {
+    set((state) => ({
+      quotations: state.quotations.map((q) => {
+        if (q.id !== quotationId) return q
+        const index = q.items.findIndex((item) => item.id === itemId)
+        const targetIndex = direction === 'up' ? index - 1 : index + 1
+        if (index === -1 || targetIndex < 0 || targetIndex >= q.items.length) return q
+        const items = [...q.items]
+        ;[items[index], items[targetIndex]] = [items[targetIndex], items[index]]
+        return { ...q, items, updatedAt: todayIso() }
+      }),
     }))
   },
 }))

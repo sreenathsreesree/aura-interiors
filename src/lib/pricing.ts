@@ -6,7 +6,7 @@ import type { DiscountType, MeasurementUnit, PricingConfig, Room, RoomItem } fro
 // store — it's pure so it can be reused, tested and later shared with the
 // BOQ/quotation generator without duplicating logic.
 
-function round2(value: number): number {
+export function round2(value: number): number {
   return Math.round((value + Number.EPSILON) * 100) / 100
 }
 
@@ -194,7 +194,7 @@ export interface ProjectBoq {
   summary: BoqSummary
 }
 
-function groupBy<T>(items: T[], keyOf: (item: T) => string): Map<string, T[]> {
+export function groupBy<T>(items: T[], keyOf: (item: T) => string): Map<string, T[]> {
   const map = new Map<string, T[]>()
   for (const item of items) {
     const key = keyOf(item)

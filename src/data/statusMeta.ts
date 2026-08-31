@@ -1,4 +1,4 @@
-import type { ProjectStatus, ProjectType, ClientStatus } from '@/types'
+import type { ProjectStatus, ProjectType, ClientStatus, QuotationStatus } from '@/types'
 
 export const PROJECT_STATUS_META: Record<ProjectStatus, { label: string; tone: 'brass' | 'sage' | 'terracotta' | 'ink' | 'success' | 'neutral' }> = {
   draft: { label: 'Draft', tone: 'neutral' },
@@ -22,3 +22,24 @@ export const CLIENT_STATUS_META: Record<ClientStatus, { label: string; tone: 'sa
   lead: { label: 'Lead', tone: 'brass' },
   archived: { label: 'Archived', tone: 'neutral' },
 }
+
+export const QUOTATION_STATUS_META: Record<
+  QuotationStatus,
+  { label: string; tone: 'brass' | 'sage' | 'terracotta' | 'ink' | 'success' | 'danger' | 'neutral' }
+> = {
+  draft: { label: 'Draft', tone: 'neutral' },
+  ready: { label: 'Ready', tone: 'brass' },
+  sent: { label: 'Sent', tone: 'terracotta' },
+  approved: { label: 'Approved', tone: 'success' },
+  rejected: { label: 'Rejected', tone: 'danger' },
+  expired: { label: 'Expired', tone: 'ink' },
+}
+
+export const QUOTATION_STATUS_OPTIONS: QuotationStatus[] = [
+  'draft',
+  'ready',
+  'sent',
+  'approved',
+  'rejected',
+  'expired',
+]

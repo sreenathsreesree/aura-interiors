@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, ChevronRight, ClipboardList, Search } from 'lucide-react'
+import { ArrowLeft, ChevronRight, ClipboardList, FileText, Search } from 'lucide-react'
 import { Button, Card, EmptyState, IconButton } from '@/components/ui'
 import { PricingSummary } from '@/components/pricing/PricingSummary'
 import { cn } from '@/lib/cn'
@@ -28,7 +28,9 @@ export function BoqPage() {
 
   const project = useAppStore((s) => s.projects.find((p) => p.id === projectId))
   const rooms = useAppStore(useShallow((s) => s.rooms.filter((r) => r.projectId === projectId)))
+  const hasQuotation = useAppStore((s) => s.quotations.some((q) => q.projectId === projectId))
   const updateItem = useAppStore((s) => s.updateItem)
+  const createQuotationFromBoq = useAppStore((s) => s.createQuotationFromBoq)
 
   const [query, setQuery] = useState('')
   const [roomFilter, setRoomFilter] = useState('all')
@@ -107,6 +109,11 @@ export function BoqPage() {
     if (!editingItem) return
     updateItem(editingItem.roomId, editingItem.item.id, payload)
     setEditingItem(undefined)
+  }
+
+  function handleCreateQuotation() {
+    if (!hasQuotation) createQuotationFromBoq(project!.id)
+    navigate(`/projects/${project!.id}/quotation`)
   }
 
   return (
@@ -334,11 +341,20 @@ export function BoqPage() {
           </div>
 
           <div className="sticky bottom-0 border-t border-ink-100 bg-white/95 px-5 py-4 backdrop-blur sm:px-8">
-            <div className="mx-auto flex max-w-4xl items-center justify-between">
-              <span className="text-sm font-medium text-ink-500">Project Grand Total</span>
-              <span className="font-display text-xl font-semibold text-brass-700">
-                {formatCurrency(boq!.summary.breakdown.grandTotal)}
-              </span>
+            <div className="mx-auto flex max-w-4xl items-center justify-between gap-4">
+              <div className="min-w-0">
+                <span className="block text-sm font-medium text-ink-500">Project Grand Total</span>
+                <span className="block truncate font-display text-xl font-semibold text-brass-700">
+                  {formatCurrency(boq!.summary.breakdown.grandTotal)}
+                </span>
+              </div>
+              <Button
+                size="md"
+                icon={<FileText className="h-4 w-4" />}
+                onClick={handleCreateQuotation}
+              >
+                {hasQuotation ? 'View Quotation' : 'Create Quotation'}
+              </Button>
             </div>
           </div>
         </>

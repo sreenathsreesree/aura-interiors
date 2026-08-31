@@ -1,14 +1,25 @@
 import { useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, MapPin, Calendar, Plus, DoorClosed, ChevronRight, Settings2, ClipboardList } from 'lucide-react'
+import {
+  ArrowLeft,
+  MapPin,
+  Calendar,
+  Plus,
+  DoorClosed,
+  ChevronRight,
+  Settings2,
+  ClipboardList,
+  FileText,
+} from 'lucide-react'
 import { Avatar, Badge, Button, Card, EmptyState, IconButton } from '@/components/ui'
 import { PricingSummary } from '@/components/pricing/PricingSummary'
+import { PricingConfigSheet } from '@/components/pricing/PricingConfigSheet'
 import { useAppStore, roomArea } from '@/store/useAppStore'
 import { useShallow } from 'zustand/react/shallow'
 import { roomPricingBreakdown, projectPricingBreakdown } from '@/lib/pricing'
-import { PROJECT_STATUS_META, PROJECT_TYPE_LABEL } from '@/data/statusMeta'
+import { quotationPricingBreakdown } from '@/lib/quotation'
+import { PROJECT_STATUS_META, PROJECT_TYPE_LABEL, QUOTATION_STATUS_META } from '@/data/statusMeta'
 import { formatCurrency, formatDate } from '@/lib/format'
 import { RoomTypePickerSheet } from '@/features/rooms/RoomTypePickerSheet'
-import { PricingSettingsSheet } from './PricingSettingsSheet'
 import { useState } from 'react'
 
 export function ProjectDetailPage() {
@@ -17,6 +28,9 @@ export function ProjectDetailPage() {
   const project = useAppStore((s) => s.projects.find((p) => p.id === projectId))
   const client = useAppStore((s) => s.clients.find((c) => c.id === project?.clientId))
   const rooms = useAppStore(useShallow((s) => s.rooms.filter((r) => r.projectId === projectId)))
+  const quotations = useAppStore(useShallow((s) => s.quotations.filter((q) => q.projectId === projectId)))
+  const updateProjectPricing = useAppStore((s) => s.updateProjectPricing)
+  const createQuotationFromBoq = useAppStore((s) => s.createQuotationFromBoq)
   const [pickerOpen, setPickerOpen] = useState(false)
   const [pricingOpen, setPricingOpen] = useState(false)
 
@@ -35,6 +49,13 @@ export function ProjectDetailPage() {
 
   const statusMeta = PROJECT_STATUS_META[project.status]
   const breakdown = projectPricingBreakdown(rooms, project.pricing)
+  const quotation = quotations[0]
+  const hasBoqItems = rooms.some((r) => r.items.length > 0)
+
+  function handleCreateQuotation() {
+    createQuotationFromBoq(project!.id)
+    navigate(`/projects/${project!.id}/quotation`)
+  }
 
   return (
     <div>
@@ -124,6 +145,50 @@ export function ProjectDetailPage() {
           <ChevronRight className="h-5 w-5 shrink-0 text-ink-300" />
         </button>
 
+        {quotation ? (
+          <button
+            onClick={() => navigate(`/projects/${project.id}/quotation`)}
+            className="mt-3 flex w-full items-center justify-between rounded-[--radius-lg] border-2 border-ink-100 bg-white px-5 py-4 text-left transition-colors hover:border-brass-400 hover:bg-brass-500/5"
+          >
+            <span className="flex items-center gap-3">
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[--radius-md] bg-brass-500/12 text-brass-600">
+                <FileText className="h-5 w-5" />
+              </span>
+              <span>
+                <span className="flex flex-wrap items-center gap-2">
+                  <span className="text-sm font-semibold text-ink-900">{quotation.quotationNumber}</span>
+                  <Badge tone={QUOTATION_STATUS_META[quotation.status].tone}>
+                    {QUOTATION_STATUS_META[quotation.status].label}
+                  </Badge>
+                </span>
+                <span className="block text-xs text-ink-500">
+                  {formatCurrency(quotationPricingBreakdown(quotation.items, quotation.pricing).grandTotal)}
+                </span>
+              </span>
+            </span>
+            <ChevronRight className="h-5 w-5 shrink-0 text-ink-300" />
+          </button>
+        ) : (
+          <button
+            onClick={handleCreateQuotation}
+            disabled={!hasBoqItems}
+            className="mt-3 flex w-full items-center justify-between rounded-[--radius-lg] border-2 border-dashed border-ink-200 bg-white px-5 py-4 text-left transition-colors hover:border-brass-400 hover:bg-brass-500/5 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:border-ink-200 disabled:hover:bg-white"
+          >
+            <span className="flex items-center gap-3">
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[--radius-md] bg-brass-500/12 text-brass-600">
+                <FileText className="h-5 w-5" />
+              </span>
+              <span>
+                <span className="block text-sm font-semibold text-ink-900">Create Quotation</span>
+                <span className="block text-xs text-ink-500">
+                  {hasBoqItems ? 'Generate a quotation from the BOQ' : 'Add room items before quoting'}
+                </span>
+              </span>
+            </span>
+            <ChevronRight className="h-5 w-5 shrink-0 text-ink-300" />
+          </button>
+        )}
+
         <div className="mt-8 flex items-center justify-between">
           <h2 className="font-display text-xl font-semibold text-ink-900">
             Rooms ({rooms.length})
@@ -199,11 +264,12 @@ export function ProjectDetailPage() {
         onRoomCreated={(room) => navigate(`/projects/${project.id}/rooms/${room.id}`)}
       />
 
-      <PricingSettingsSheet
+      <PricingConfigSheet
         open={pricingOpen}
         onClose={() => setPricingOpen(false)}
-        projectId={project.id}
         pricing={project.pricing}
+        onSave={(pricing) => updateProjectPricing(project.id, pricing)}
+        subtitle="Applies across every room in this project."
       />
     </div>
   )

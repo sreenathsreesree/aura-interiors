@@ -10,6 +10,7 @@ import { NewProjectPage } from '@/features/projects/NewProjectPage'
 import { RoomBuilderPage } from '@/features/rooms/RoomBuilderPage'
 import { CataloguePage } from '@/features/catalogue/CataloguePage'
 import { BoqPage } from '@/features/boq/BoqPage'
+import { QuotationBuilderPage } from '@/features/quotation/QuotationBuilderPage'
 
 function App() {
   return (
@@ -27,6 +28,7 @@ function App() {
         <Route path="/projects/new" element={<NewProjectPage />} />
         <Route path="/projects/:projectId/rooms/:roomId" element={<RoomBuilderPage />} />
         <Route path="/projects/:projectId/boq" element={<BoqPage />} />
+        <Route path="/projects/:projectId/quotation" element={<QuotationBuilderPage />} />
       </Route>
 
       <Route path="*" element={<Navigate to="/" replace />} />
