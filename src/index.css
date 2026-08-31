@@ -1,0 +1,110 @@
+@import "tailwindcss";
+
+/* Fonts: Fraunces (display/serif, branding & headings) + Manrope (UI sans) */
+@import "@fontsource/fraunces/500.css";
+@import "@fontsource/fraunces/600.css";
+@import "@fontsource/fraunces/600-italic.css";
+@import "@fontsource/manrope/400.css";
+@import "@fontsource/manrope/500.css";
+@import "@fontsource/manrope/600.css";
+@import "@fontsource/manrope/700.css";
+@import "@fontsource/manrope/800.css";
+
+@theme {
+  /* ---- Brand palette: warm architectural neutrals + brass accent ---- */
+  --font-display: "Fraunces", "Georgia", serif;
+  --font-sans: "Manrope", "system-ui", sans-serif;
+
+  --color-ink-950: #1b1815;
+  --color-ink-900: #221f1b;
+  --color-ink-800: #322d27;
+  --color-ink-700: #453e36;
+  --color-ink-600: #5c5348;
+  --color-ink-500: #75695a;
+  --color-ink-400: #948676;
+  --color-ink-300: #b3a894;
+  --color-ink-200: #d6cbb8;
+  --color-ink-100: #e8e0d1;
+  --color-ink-50: #f3ede2;
+
+  --color-sand-50: #fbf9f6;
+  --color-sand-100: #f6f1ea;
+  --color-sand-200: #ede4d6;
+  --color-sand-300: #e0d3bd;
+  --color-sand-400: #cbb896;
+
+  --color-brass-400: #c9a15f;
+  --color-brass-500: #b5893f;
+  --color-brass-600: #966f30;
+  --color-brass-700: #785828;
+
+  --color-terracotta-400: #c97b5c;
+  --color-terracotta-500: #b6613f;
+  --color-terracotta-600: #954e32;
+
+  --color-sage-400: #8ea083;
+  --color-sage-500: #71856a;
+  --color-sage-600: #576c51;
+
+  --color-clay-500: #a34a3d;
+
+  --color-success-500: #5f8b5a;
+  --color-warning-500: #c98a2c;
+  --color-danger-500: #b44b3f;
+
+  /* Elevation shadows tuned for soft, matte surfaces */
+  --shadow-soft: 0 1px 2px rgba(27, 24, 21, 0.04), 0 6px 20px -8px rgba(27, 24, 21, 0.12);
+  --shadow-card: 0 2px 6px rgba(27, 24, 21, 0.05), 0 12px 32px -12px rgba(27, 24, 21, 0.18);
+  --shadow-float: 0 8px 16px rgba(27, 24, 21, 0.08), 0 24px 48px -16px rgba(27, 24, 21, 0.24);
+
+  --radius-md: 0.625rem;
+  --radius-lg: 1rem;
+  --radius-xl: 1.5rem;
+  --radius-2xl: 2rem;
+}
+
+@layer base {
+  * {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  html {
+    font-family: var(--font-sans);
+    color: var(--color-ink-900);
+    /* Prevent iOS double-tap zoom / accidental pinch on a touch-first app */
+    touch-action: manipulation;
+  }
+
+  body {
+    background: var(--color-sand-100);
+    overscroll-behavior-y: none;
+  }
+
+  ::selection {
+    background: var(--color-brass-400);
+    color: var(--color-sand-50);
+  }
+
+  input, textarea, select, button {
+    font-family: inherit;
+  }
+
+  /* Larger baseline tap targets everywhere for touch use */
+  button, [role="button"] {
+    touch-action: manipulation;
+  }
+}
+
+@layer utilities {
+  .font-display {
+    font-family: var(--font-display);
+  }
+
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+}
