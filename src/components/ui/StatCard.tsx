@@ -20,18 +20,20 @@ const toneClasses = {
 
 export function StatCard({ label, value, icon, trend, tone = 'ink', className }: StatCardProps) {
   return (
-    <Card className={cn('flex items-center gap-4', className)}>
+    <Card padding="sm" className={cn('flex items-center gap-3', className)}>
       <div
         className={cn(
-          'flex h-13 w-13 shrink-0 items-center justify-center rounded-[--radius-md]',
+          'flex h-11 w-11 shrink-0 items-center justify-center rounded-[--radius-md] [&>svg]:h-5 [&>svg]:w-5',
           toneClasses[tone],
         )}
       >
         {icon}
       </div>
       <div className="min-w-0">
-        <p className="truncate text-sm font-medium text-ink-500">{label}</p>
-        <p className="font-display text-2xl font-semibold leading-tight text-ink-900">{value}</p>
+        <p className="truncate text-xs font-medium text-ink-500 sm:text-sm">{label}</p>
+        <p className="whitespace-nowrap font-display text-xl font-semibold leading-tight text-ink-900">
+          {value}
+        </p>
         {trend && <p className="mt-0.5 text-xs font-medium text-sage-600">{trend}</p>}
       </div>
     </Card>
