@@ -156,3 +156,96 @@ export const DEFAULT_PRICING_CONFIG: PricingConfig = {
   discountValue: 0,
   taxRatePercent: 18,
 }
+
+// --- BOQ grouping ----------------------------------------------------------
+// Groups the same BOQ lines (Room → Category → Item) and rolls up subtotals
+// at every level, purely by reducing buildProjectBoqLines — no separate
+// quantities or prices are introduced, so this always reflects live room data.
+
+export interface BoqCategoryGroup {
+  category: string
+  lines: BoqLineItem[]
+  subtotal: number
+}
+
+export interface BoqRoomGroup {
+  roomId: string
+  roomName: string
+  categories: BoqCategoryGroup[]
+  subtotal: number
+  itemCount: number
+}
+
+export interface BoqSubtotalEntry {
+  label: string
+  subtotal: number
+}
+
+export interface BoqSummary {
+  totalItems: number
+  roomSubtotals: BoqSubtotalEntry[]
+  categorySubtotals: BoqSubtotalEntry[]
+  breakdown: PricingBreakdown
+}
+
+export interface ProjectBoq {
+  lines: BoqLineItem[]
+  rooms: BoqRoomGroup[]
+  summary: BoqSummary
+}
+
+function groupBy<T>(items: T[], keyOf: (item: T) => string): Map<string, T[]> {
+  const map = new Map<string, T[]>()
+  for (const item of items) {
+    const key = keyOf(item)
+    const bucket = map.get(key)
+    if (bucket) bucket.push(item)
+    else map.set(key, [item])
+  }
+  return map
+}
+
+export function buildProjectBoq(rooms: Room[], config: PricingConfig): ProjectBoq {
+  const lines = buildProjectBoqLines(rooms, config)
+  const linesByRoom = groupBy(lines, (l) => l.roomId)
+
+  const roomGroups: BoqRoomGroup[] = rooms
+    .filter((room) => room.items.length > 0)
+    .map((room) => {
+      const roomLines = linesByRoom.get(room.id) ?? []
+      const linesByCategory = groupBy(roomLines, (l) => l.category)
+      const categories: BoqCategoryGroup[] = Array.from(linesByCategory.entries()).map(
+        ([category, categoryLines]) => ({
+          category,
+          lines: categoryLines,
+          subtotal: round2(categoryLines.reduce((sum, l) => sum + l.baseAmount, 0)),
+        }),
+      )
+      return {
+        roomId: room.id,
+        roomName: room.name,
+        categories,
+        subtotal: roomSubtotal(room),
+        itemCount: roomLines.length,
+      }
+    })
+
+  const categoryTotals = new Map<string, number>()
+  for (const line of lines) {
+    categoryTotals.set(line.category, (categoryTotals.get(line.category) ?? 0) + line.baseAmount)
+  }
+
+  return {
+    lines,
+    rooms: roomGroups,
+    summary: {
+      totalItems: lines.length,
+      roomSubtotals: roomGroups.map((r) => ({ label: r.roomName, subtotal: r.subtotal })),
+      categorySubtotals: Array.from(categoryTotals.entries()).map(([category, subtotal]) => ({
+        label: category,
+        subtotal: round2(subtotal),
+      })),
+      breakdown: projectPricingBreakdown(rooms, config),
+    },
+  }
+}

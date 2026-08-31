@@ -1,5 +1,5 @@
 import { useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, MapPin, Calendar, Plus, DoorClosed, ChevronRight, Settings2 } from 'lucide-react'
+import { ArrowLeft, MapPin, Calendar, Plus, DoorClosed, ChevronRight, Settings2, ClipboardList } from 'lucide-react'
 import { Avatar, Badge, Button, Card, EmptyState, IconButton } from '@/components/ui'
 import { PricingSummary } from '@/components/pricing/PricingSummary'
 import { useAppStore, roomArea } from '@/store/useAppStore'
@@ -107,6 +107,22 @@ export function ProjectDetailPage() {
             <PricingSummary breakdown={breakdown} totalLabel="Grand Total" />
           </Card>
         </div>
+
+        <button
+          onClick={() => navigate(`/projects/${project.id}/boq`)}
+          className="mt-4 flex w-full items-center justify-between rounded-[--radius-lg] border-2 border-ink-100 bg-white px-5 py-4 text-left transition-colors hover:border-brass-400 hover:bg-brass-500/5"
+        >
+          <span className="flex items-center gap-3">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[--radius-md] bg-brass-500/12 text-brass-600">
+              <ClipboardList className="h-5 w-5" />
+            </span>
+            <span>
+              <span className="block text-sm font-semibold text-ink-900">Bill of Quantities</span>
+              <span className="block text-xs text-ink-500">Grouped, priced item breakdown for this project</span>
+            </span>
+          </span>
+          <ChevronRight className="h-5 w-5 shrink-0 text-ink-300" />
+        </button>
 
         <div className="mt-8 flex items-center justify-between">
           <h2 className="font-display text-xl font-semibold text-ink-900">
