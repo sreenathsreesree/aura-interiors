@@ -70,7 +70,7 @@ export function ProjectDetailPage() {
             </Badge>
           </div>
 
-          <div className="grid grid-cols-1 gap-3 border-t border-ink-100 pt-4 sm:grid-cols-3">
+          <div className="grid grid-cols-1 gap-3 border-t border-ink-100 pt-4 lg:grid-cols-3">
             <div className="flex items-center gap-2.5 text-sm text-ink-600">
               <MapPin className="h-4 w-4 shrink-0 text-brass-500" />
               <span className="truncate">{project.address}</span>
@@ -135,7 +135,7 @@ export function ProjectDetailPage() {
             }
           />
         ) : (
-          <div className="mt-4 grid grid-cols-1 gap-3.5 sm:grid-cols-2 xl:grid-cols-3">
+          <div className="mt-4 grid grid-cols-1 gap-3.5 lg:grid-cols-2 xl:grid-cols-3">
             {rooms.map((room) => {
               const checkedCount = room.requirements.filter((r) => r.isChecked).length
               return (

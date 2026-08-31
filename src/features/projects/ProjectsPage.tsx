@@ -92,7 +92,7 @@ export function ProjectsPage() {
             }
           />
         ) : (
-          <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2 xl:grid-cols-3">
             {filtered.map((project) => (
               <ProjectCard key={project.id} project={project} />
             ))}

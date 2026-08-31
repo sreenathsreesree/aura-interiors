@@ -201,7 +201,7 @@ export function RoomBuilderPage() {
                 <Ruler className="h-5 w-5 text-brass-500" />
                 <h2 className="font-display text-lg font-semibold text-ink-900">Dimensions</h2>
               </div>
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+              <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
                 <NumberStepper
                   label="Length"
                   value={room.dimensions.lengthFt}

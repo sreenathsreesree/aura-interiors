@@ -64,7 +64,7 @@ export function ClientsPage() {
       />
 
       <div className="px-5 py-6 sm:px-8">
-        <div className="flex flex-col gap-3.5 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-col gap-3.5">
           <div className="relative w-full sm:max-w-sm">
             <Search className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-ink-400" />
             <input
@@ -104,7 +104,7 @@ export function ClientsPage() {
             }
           />
         ) : (
-          <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2 xl:grid-cols-3">
             {filtered.map((client) => {
               const statusMeta = CLIENT_STATUS_META[client.status]
               const count = projectCountFor(client.id)
@@ -116,7 +116,7 @@ export function ClientsPage() {
                   className="flex flex-col gap-4"
                 >
                   <div className="flex items-start justify-between gap-3">
-                    <div className="flex items-center gap-3.5">
+                    <div className="flex min-w-0 flex-1 items-center gap-3.5">
                       <Avatar name={client.name} color={client.avatarColor} size="lg" />
                       <div className="min-w-0">
                         <h3 className="truncate font-display text-lg font-semibold text-ink-900">
@@ -125,7 +125,9 @@ export function ClientsPage() {
                         <p className="truncate text-sm text-ink-500">{client.city}</p>
                       </div>
                     </div>
-                    <Badge tone={statusMeta.tone}>{statusMeta.label}</Badge>
+                    <Badge tone={statusMeta.tone} className="shrink-0">
+                      {statusMeta.label}
+                    </Badge>
                   </div>
 
                   <div className="flex flex-col gap-1.5 text-sm text-ink-600">

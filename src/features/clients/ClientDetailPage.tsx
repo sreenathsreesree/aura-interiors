@@ -59,7 +59,7 @@ export function ClientDetailPage() {
           </Button>
         </Card>
 
-        <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <div className="mt-5 grid grid-cols-1 gap-4 lg:grid-cols-3">
           <Card className="flex items-center gap-3">
             <Phone className="h-5 w-5 shrink-0 text-brass-500" />
             <div className="min-w-0">
@@ -110,7 +110,7 @@ export function ClientDetailPage() {
             }
           />
         ) : (
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             {projects.map((project) => (
               <ProjectCard key={project.id} project={project} />
             ))}
