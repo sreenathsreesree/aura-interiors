@@ -3,6 +3,7 @@ import { Search, Package, Info } from 'lucide-react'
 import { Sheet, Input, Textarea, Button, NumberStepper, Badge } from '@/components/ui'
 import { cn } from '@/lib/cn'
 import { useAppStore } from '@/store/useAppStore'
+import { useShallow } from 'zustand/react/shallow'
 import { calculateBaseAmount } from '@/lib/pricing'
 import type { CatalogueItem, MeasurementUnit, RoomItem } from '@/types'
 import { formatCurrency } from '@/lib/format'
@@ -22,7 +23,9 @@ interface AddItemSheetProps {
 }
 
 export function AddItemSheet({ open, onClose, onSave, initialItem }: AddItemSheetProps) {
-  const activeCatalogueItems = useAppStore((s) => s.catalogueItems.filter((c) => c.isActive))
+  const activeCatalogueItems = useAppStore(
+    useShallow((s) => s.catalogueItems.filter((c) => c.isActive)),
+  )
 
   const [query, setQuery] = useState('')
   const [catalogueItemId, setCatalogueItemId] = useState(initialItem?.catalogueItemId)
