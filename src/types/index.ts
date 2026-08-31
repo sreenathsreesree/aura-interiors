@@ -44,6 +44,7 @@ export interface Project {
   targetDate?: string
   coverColor: string
   roomIds: string[]
+  pricing: PricingConfig
 }
 
 export type RoomType =
@@ -66,16 +67,49 @@ export interface RoomDimensions {
   heightFt: number
 }
 
-export type ItemUnit = 'sqft' | 'rft' | 'nos' | 'lump-sum'
+export type MeasurementUnit = 'sqft' | 'rft' | 'nos' | 'lump-sum'
 
-export interface RoomItem {
+// A master catalogue entry — the studio's standard rate card. Project items
+// reference a catalogue item by id but keep their own copy of everything
+// (see RoomItem) so historical BOQs stay stable even if the catalogue changes.
+export interface CatalogueItem {
   id: string
   name: string
   category: string
-  unit: ItemUnit
+  subCategory?: string
+  description?: string
+  unit: MeasurementUnit
+  defaultRate: number
+  material?: string
+  finish?: string
+  brand?: string
+  isActive: boolean
+}
+
+export interface RoomItem {
+  id: string
+  /** Links back to the catalogue entry this was added from; undefined for a fully custom item. */
+  catalogueItemId?: string
+  name: string
+  category: string
+  description?: string
+  unit: MeasurementUnit
   quantity: number
+  /** The catalogue's rate at the time this item was added — for comparison only, never edited here. */
+  masterRate: number
+  /** The rate actually billed for this project; defaults to masterRate but can be overridden per item. */
   rate: number
-  notes?: string
+}
+
+export type DiscountType = 'none' | 'percentage' | 'fixed'
+
+// Configurable pricing rules for a project. Applied uniformly wherever a
+// subtotal needs to become a billable total — see src/lib/pricing.ts.
+export interface PricingConfig {
+  markupPercent: number
+  discountType: DiscountType
+  discountValue: number
+  taxRatePercent: number
 }
 
 export interface RoomRequirement {

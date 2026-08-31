@@ -24,6 +24,10 @@ export function formatDate(dateStr: string): string {
   })
 }
 
+export function formatPercent(value: number): string {
+  return `${value % 1 === 0 ? value : value.toFixed(1)}%`
+}
+
 export function formatArea(sqft: number): string {
   return `${sqft.toLocaleString('en-IN', { maximumFractionDigits: 1 })} sqft`
 }

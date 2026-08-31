@@ -4,6 +4,7 @@ import { ArrowLeft, ArrowRight, Search, Check, UserRound } from 'lucide-react'
 import { Avatar, Button, Card, IconButton, Input, ProgressSteps } from '@/components/ui'
 import { cn } from '@/lib/cn'
 import { useAppStore } from '@/store/useAppStore'
+import { DEFAULT_PRICING_CONFIG } from '@/lib/pricing'
 import { ROOM_TYPE_OPTIONS } from '@/data/roomTypes'
 import { getRoomIcon } from '@/data/roomIcons'
 import { PROJECT_TYPE_LABEL } from '@/data/statusMeta'
@@ -99,6 +100,7 @@ export function NewProjectPage() {
       budgetEstimate: Number(budget) || 0,
       targetDate: targetDate || undefined,
       coverColor: 'brass',
+      pricing: DEFAULT_PRICING_CONFIG,
     })
     selectedRoomTypes.forEach((type) => addRoom(project.id, type))
     navigate(`/projects/${project.id}`)

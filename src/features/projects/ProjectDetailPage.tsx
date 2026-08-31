@@ -1,11 +1,14 @@
 import { useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, MapPin, Calendar, Plus, DoorClosed, ChevronRight } from 'lucide-react'
+import { ArrowLeft, MapPin, Calendar, Plus, DoorClosed, ChevronRight, Settings2 } from 'lucide-react'
 import { Avatar, Badge, Button, Card, EmptyState, IconButton } from '@/components/ui'
-import { useAppStore, roomArea, roomTotal, projectTotal } from '@/store/useAppStore'
+import { PricingSummary } from '@/components/pricing/PricingSummary'
+import { useAppStore, roomArea } from '@/store/useAppStore'
 import { useShallow } from 'zustand/react/shallow'
+import { roomPricingBreakdown, projectPricingBreakdown } from '@/lib/pricing'
 import { PROJECT_STATUS_META, PROJECT_TYPE_LABEL } from '@/data/statusMeta'
 import { formatCurrency, formatDate } from '@/lib/format'
 import { RoomTypePickerSheet } from '@/features/rooms/RoomTypePickerSheet'
+import { PricingSettingsSheet } from './PricingSettingsSheet'
 import { useState } from 'react'
 
 export function ProjectDetailPage() {
@@ -15,6 +18,7 @@ export function ProjectDetailPage() {
   const client = useAppStore((s) => s.clients.find((c) => c.id === project?.clientId))
   const rooms = useAppStore(useShallow((s) => s.rooms.filter((r) => r.projectId === projectId)))
   const [pickerOpen, setPickerOpen] = useState(false)
+  const [pricingOpen, setPricingOpen] = useState(false)
 
   if (!project) {
     return (
@@ -30,7 +34,7 @@ export function ProjectDetailPage() {
   }
 
   const statusMeta = PROJECT_STATUS_META[project.status]
-  const total = projectTotal(rooms)
+  const breakdown = projectPricingBreakdown(rooms, project.pricing)
 
   return (
     <div>
@@ -84,8 +88,8 @@ export function ProjectDetailPage() {
           </div>
         </Card>
 
-        <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <Card className="flex items-center justify-between">
+        <div className="mt-5 grid grid-cols-1 gap-4 lg:grid-cols-[1fr_1.4fr]">
+          <Card className="flex items-center justify-between self-start">
             <div>
               <p className="text-xs font-medium text-ink-400">Estimated Budget</p>
               <p className="mt-0.5 font-display text-xl font-semibold text-ink-900">
@@ -93,13 +97,14 @@ export function ProjectDetailPage() {
               </p>
             </div>
           </Card>
-          <Card className="flex items-center justify-between">
-            <div>
-              <p className="text-xs font-medium text-ink-400">Current BOQ Total</p>
-              <p className="mt-0.5 font-display text-xl font-semibold text-brass-600">
-                {formatCurrency(total)}
-              </p>
+          <Card>
+            <div className="mb-1 flex items-center justify-between">
+              <h2 className="font-display text-base font-semibold text-ink-900">Project Pricing</h2>
+              <IconButton label="Edit pricing settings" variant="ghost" size="sm" onClick={() => setPricingOpen(true)}>
+                <Settings2 className="h-4 w-4" />
+              </IconButton>
             </div>
+            <PricingSummary breakdown={breakdown} totalLabel="Grand Total" />
           </Card>
         </div>
 
@@ -160,7 +165,7 @@ export function ProjectDetailPage() {
                   </p>
                   <div className="flex items-center justify-between border-t border-ink-100 pt-3">
                     <span className="font-display text-base font-semibold text-ink-900">
-                      {formatCurrency(roomTotal(room))}
+                      {formatCurrency(roomPricingBreakdown(room, rooms, project.pricing).grandTotal)}
                     </span>
                     <ChevronRight className="h-5 w-5 text-ink-300" />
                   </div>
@@ -176,6 +181,13 @@ export function ProjectDetailPage() {
         onClose={() => setPickerOpen(false)}
         projectId={project.id}
         onRoomCreated={(room) => navigate(`/projects/${project.id}/rooms/${room.id}`)}
+      />
+
+      <PricingSettingsSheet
+        open={pricingOpen}
+        onClose={() => setPricingOpen(false)}
+        projectId={project.id}
+        pricing={project.pricing}
       />
     </div>
   )

@@ -1,4 +1,11 @@
-import type { Client, Project, Room } from '@/types'
+import type { Client, PricingConfig, Project, Room } from '@/types'
+
+const STANDARD_PRICING: PricingConfig = {
+  markupPercent: 15,
+  discountType: 'none',
+  discountValue: 0,
+  taxRatePercent: 18,
+}
 
 export const SAMPLE_CLIENTS: Client[] = [
   {
@@ -86,6 +93,7 @@ export const SAMPLE_PROJECTS: Project[] = [
     targetDate: '2026-11-15',
     coverColor: 'brass',
     roomIds: ['rm-1', 'rm-2', 'rm-3', 'rm-4'],
+    pricing: STANDARD_PRICING,
   },
   {
     id: 'pr-2',
@@ -100,6 +108,7 @@ export const SAMPLE_PROJECTS: Project[] = [
     targetDate: '2026-10-10',
     coverColor: 'terracotta',
     roomIds: ['rm-5', 'rm-6'],
+    pricing: { markupPercent: 12, discountType: 'fixed', discountValue: 10000, taxRatePercent: 18 },
   },
   {
     id: 'pr-3',
@@ -113,6 +122,7 @@ export const SAMPLE_PROJECTS: Project[] = [
     updatedAt: '2026-08-28',
     coverColor: 'sage',
     roomIds: ['rm-7'],
+    pricing: { markupPercent: 18, discountType: 'percentage', discountValue: 5, taxRatePercent: 18 },
   },
   {
     id: 'pr-4',
@@ -126,6 +136,7 @@ export const SAMPLE_PROJECTS: Project[] = [
     updatedAt: '2026-03-02',
     coverColor: 'clay',
     roomIds: [],
+    pricing: STANDARD_PRICING,
   },
   {
     id: 'pr-5',
@@ -140,6 +151,7 @@ export const SAMPLE_PROJECTS: Project[] = [
     targetDate: '2026-09-30',
     coverColor: 'ink',
     roomIds: [],
+    pricing: STANDARD_PRICING,
   },
 ]
 
@@ -158,9 +170,9 @@ export const SAMPLE_ROOMS: Room[] = [
       { id: 'req-5', label: 'Storage / display unit', isChecked: false },
     ],
     items: [
-      { id: 'it-1', name: 'TV Unit with Storage', category: 'Living', unit: 'sqft', quantity: 64, rate: 1750 },
-      { id: 'it-2', name: 'False Ceiling — Gypsum with Cove', category: 'Ceiling', unit: 'sqft', quantity: 252, rate: 95 },
-      { id: 'it-3', name: 'Cove & Profile Lighting', category: 'Lighting', unit: 'rft', quantity: 64, rate: 220 },
+      { id: 'it-1', catalogueItemId: 'cat-t1', name: 'TV Unit with Storage', category: 'TV Unit', unit: 'sqft', quantity: 64, masterRate: 1750, rate: 1750 },
+      { id: 'it-2', catalogueItemId: 'cat-f1', name: 'False Ceiling — Gypsum with Cove', category: 'False Ceiling', unit: 'sqft', quantity: 252, masterRate: 95, rate: 95 },
+      { id: 'it-3', catalogueItemId: 'cat-f3', name: 'Cove & Profile Lighting', category: 'False Ceiling', unit: 'rft', quantity: 64, masterRate: 220, rate: 220 },
     ],
     isComplete: true,
   },
@@ -177,8 +189,8 @@ export const SAMPLE_ROOMS: Room[] = [
       { id: 'req-9', label: 'False ceiling', isChecked: true },
     ],
     items: [
-      { id: 'it-4', name: 'Modular Wardrobe (Sliding Shutter)', category: 'Wardrobe', unit: 'sqft', quantity: 72, rate: 1850 },
-      { id: 'it-5', name: 'Bed Back Panel', category: 'Bedroom', unit: 'sqft', quantity: 48, rate: 1100 },
+      { id: 'it-4', catalogueItemId: 'cat-w1', name: 'Modular Wardrobe (Sliding Shutter)', category: 'Wardrobe', unit: 'sqft', quantity: 72, masterRate: 1850, rate: 1850 },
+      { id: 'it-5', catalogueItemId: 'cat-b1', name: 'Bed Back Panel', category: 'Bedroom', unit: 'sqft', quantity: 48, masterRate: 1100, rate: 1100 },
     ],
     isComplete: true,
   },
@@ -195,9 +207,9 @@ export const SAMPLE_ROOMS: Room[] = [
       { id: 'req-13', label: 'Chimney & hob provision', isChecked: true },
     ],
     items: [
-      { id: 'it-6', name: 'Base Unit — Kitchen', category: 'Kitchen', unit: 'rft', quantity: 18, rate: 2400 },
-      { id: 'it-7', name: 'Wall Unit — Kitchen', category: 'Kitchen', unit: 'rft', quantity: 14, rate: 1950 },
-      { id: 'it-8', name: 'Quartz Countertop', category: 'Kitchen', unit: 'sqft', quantity: 32, rate: 480 },
+      { id: 'it-6', catalogueItemId: 'cat-k1', name: 'Base Unit — Kitchen', category: 'Kitchen', unit: 'rft', quantity: 18, masterRate: 2400, rate: 2400 },
+      { id: 'it-7', catalogueItemId: 'cat-k2', name: 'Wall Unit — Kitchen', category: 'Kitchen', unit: 'rft', quantity: 14, masterRate: 1950, rate: 1950 },
+      { id: 'it-8', catalogueItemId: 'cat-k4', name: 'Quartz Countertop', category: 'Kitchen', unit: 'sqft', quantity: 32, masterRate: 480, rate: 480 },
     ],
     isComplete: false,
   },
@@ -225,8 +237,8 @@ export const SAMPLE_ROOMS: Room[] = [
       { id: 'req-17', label: 'False ceiling with cove lighting', isChecked: true },
     ],
     items: [
-      { id: 'it-9', name: 'TV Unit with Storage', category: 'Living', unit: 'sqft', quantity: 56, rate: 1750 },
-      { id: 'it-10', name: 'Wall Paneling — Veneer Finish', category: 'Living', unit: 'sqft', quantity: 90, rate: 950 },
+      { id: 'it-9', catalogueItemId: 'cat-t1', name: 'TV Unit with Storage', category: 'TV Unit', unit: 'sqft', quantity: 56, masterRate: 1750, rate: 1700 },
+      { id: 'it-10', catalogueItemId: 'cat-l1', name: 'Wall Paneling — Veneer Finish', category: 'Living Room', unit: 'sqft', quantity: 90, masterRate: 950, rate: 950 },
     ],
     isComplete: true,
   },
@@ -240,7 +252,7 @@ export const SAMPLE_ROOMS: Room[] = [
       { id: 'req-18', label: 'Wardrobe (sliding / hinged)', isChecked: true },
     ],
     items: [
-      { id: 'it-11', name: 'Modular Wardrobe (Hinged Shutter)', category: 'Wardrobe', unit: 'sqft', quantity: 60, rate: 1650 },
+      { id: 'it-11', catalogueItemId: 'cat-w2', name: 'Modular Wardrobe (Hinged Shutter)', category: 'Wardrobe', unit: 'sqft', quantity: 60, masterRate: 1650, rate: 1650 },
     ],
     isComplete: true,
   },

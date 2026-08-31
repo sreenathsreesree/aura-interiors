@@ -10,11 +10,14 @@ import {
   PackagePlus,
   Check,
   DoorClosed,
+  Receipt,
 } from 'lucide-react'
 import { Badge, Button, Card, EmptyState, IconButton, NumberStepper } from '@/components/ui'
+import { PricingSummary } from '@/components/pricing/PricingSummary'
 import { cn } from '@/lib/cn'
-import { useAppStore, roomArea, roomTotal } from '@/store/useAppStore'
+import { useAppStore, roomArea } from '@/store/useAppStore'
 import { useShallow } from 'zustand/react/shallow'
+import { calculateBaseAmount, roomPricingBreakdown } from '@/lib/pricing'
 import { formatCurrency } from '@/lib/format'
 import { getRoomIcon } from '@/data/roomIcons'
 import { getRoomTypeOption } from '@/data/roomTypes'
@@ -69,7 +72,7 @@ export function RoomBuilderPage() {
   }
 
   const area = roomArea(room)
-  const total = roomTotal(room)
+  const breakdown = roomPricingBreakdown(room, rooms, project.pricing)
   const checkedCount = room.requirements.filter((r) => r.isChecked).length
 
   function goToRoom(nextRoomId: string) {
@@ -307,40 +310,63 @@ export function RoomBuilderPage() {
                 </div>
               ) : (
                 <div className="divide-y divide-ink-100 border-t border-ink-100">
-                  {room.items.map((item) => (
-                    <div key={item.id} className="flex items-center gap-3 px-5 py-4">
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-semibold text-ink-900">{item.name}</p>
-                        <p className="truncate text-xs text-ink-500">
-                          {item.quantity} {item.unit} × {formatCurrency(item.rate)}
-                        </p>
+                  {room.items.map((item) => {
+                    const isOverridden = Boolean(item.catalogueItemId) && item.rate !== item.masterRate
+                    return (
+                      <div key={item.id} className="flex items-center gap-3 px-5 py-4">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <p className="truncate text-sm font-semibold text-ink-900">{item.name}</p>
+                            {isOverridden && (
+                              <Badge tone="terracotta" className="shrink-0">
+                                Custom rate
+                              </Badge>
+                            )}
+                          </div>
+                          <p className="truncate text-xs text-ink-500">
+                            {item.unit === 'lump-sum'
+                              ? `Flat rate · ${formatCurrency(item.rate)}`
+                              : `${item.quantity} ${item.unit} × ${formatCurrency(item.rate)}`}
+                          </p>
+                        </div>
+                        <span className="shrink-0 font-display text-sm font-semibold text-ink-900">
+                          {formatCurrency(calculateBaseAmount(item.quantity, item.rate, item.unit))}
+                        </span>
+                        <div className="flex shrink-0 items-center gap-1">
+                          <IconButton
+                            label="Edit item"
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => setItemSheet({ open: true, editing: item })}
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </IconButton>
+                          <IconButton
+                            label="Delete item"
+                            size="sm"
+                            variant="danger"
+                            onClick={() => removeItem(room.id, item.id)}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </IconButton>
+                        </div>
                       </div>
-                      <span className="shrink-0 font-display text-sm font-semibold text-ink-900">
-                        {formatCurrency(item.quantity * item.rate)}
-                      </span>
-                      <div className="flex shrink-0 items-center gap-1">
-                        <IconButton
-                          label="Edit item"
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => setItemSheet({ open: true, editing: item })}
-                        >
-                          <Pencil className="h-4 w-4" />
-                        </IconButton>
-                        <IconButton
-                          label="Delete item"
-                          size="sm"
-                          variant="danger"
-                          onClick={() => removeItem(room.id, item.id)}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </IconButton>
-                      </div>
-                    </div>
-                  ))}
+                    )
+                  })}
                 </div>
               )}
             </Card>
+
+            {/* Pricing */}
+            {room.items.length > 0 && (
+              <Card>
+                <div className="mb-2 flex items-center gap-2.5">
+                  <Receipt className="h-5 w-5 text-brass-500" />
+                  <h2 className="font-display text-lg font-semibold text-ink-900">Pricing</h2>
+                </div>
+                <PricingSummary breakdown={breakdown} totalLabel="Room Total" compact />
+              </Card>
+            )}
           </div>
         </div>
 
@@ -349,7 +375,9 @@ export function RoomBuilderPage() {
           <div className="mx-auto flex max-w-3xl items-center gap-4">
             <div className="min-w-0 flex-1">
               <p className="text-xs font-medium text-ink-400">Room Total</p>
-              <p className="font-display text-xl font-semibold text-ink-900">{formatCurrency(total)}</p>
+              <p className="font-display text-xl font-semibold text-ink-900">
+                {formatCurrency(breakdown.grandTotal)}
+              </p>
             </div>
             <Button size="xl" icon={<Check className="h-5 w-5" />} onClick={handleSaveAndContinue}>
               Save &amp; Continue
@@ -366,6 +394,7 @@ export function RoomBuilderPage() {
       />
 
       <AddItemSheet
+        key={itemSheet.editing?.id ?? 'new'}
         open={itemSheet.open}
         onClose={() => setItemSheet({ open: false })}
         onSave={handleSaveItem}

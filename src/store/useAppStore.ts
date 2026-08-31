@@ -1,6 +1,16 @@
 import { create } from 'zustand'
-import type { Client, Project, Room, RoomItem, RoomRequirement, RoomType } from '@/types'
+import type {
+  CatalogueItem,
+  Client,
+  PricingConfig,
+  Project,
+  Room,
+  RoomItem,
+  RoomRequirement,
+  RoomType,
+} from '@/types'
 import { SAMPLE_CLIENTS, SAMPLE_PROJECTS, SAMPLE_ROOMS } from '@/data/sampleData'
+import { CATALOGUE_ITEMS } from '@/data/catalogue'
 import { getRoomTypeOption } from '@/data/roomTypes'
 import { generateId } from '@/lib/id'
 
@@ -8,12 +18,14 @@ interface AppState {
   clients: Client[]
   projects: Project[]
   rooms: Room[]
+  catalogueItems: CatalogueItem[]
 
   // Clients
   addClient: (client: Omit<Client, 'id' | 'createdAt'>) => Client
 
   // Projects
   addProject: (project: Omit<Project, 'id' | 'createdAt' | 'updatedAt' | 'roomIds'>) => Project
+  updateProjectPricing: (projectId: string, updates: Partial<PricingConfig>) => void
 
   // Rooms
   addRoom: (projectId: string, type: RoomType, name?: string) => Room
@@ -25,12 +37,18 @@ interface AppState {
   updateItem: (roomId: string, itemId: string, updates: Partial<Omit<RoomItem, 'id'>>) => void
   removeItem: (roomId: string, itemId: string) => void
   markRoomComplete: (roomId: string, isComplete: boolean) => void
+
+  // Catalogue
+  addCatalogueItem: (item: Omit<CatalogueItem, 'id'>) => CatalogueItem
+  updateCatalogueItem: (itemId: string, updates: Partial<Omit<CatalogueItem, 'id'>>) => void
+  setCatalogueItemActive: (itemId: string, isActive: boolean) => void
 }
 
 export const useAppStore = create<AppState>((set) => ({
   clients: SAMPLE_CLIENTS,
   projects: SAMPLE_PROJECTS,
   rooms: SAMPLE_ROOMS,
+  catalogueItems: CATALOGUE_ITEMS,
 
   addClient: (client) => {
     const newClient: Client = {
@@ -53,6 +71,14 @@ export const useAppStore = create<AppState>((set) => ({
     }
     set((state) => ({ projects: [newProject, ...state.projects] }))
     return newProject
+  },
+
+  updateProjectPricing: (projectId, updates) => {
+    set((state) => ({
+      projects: state.projects.map((p) =>
+        p.id === projectId ? { ...p, pricing: { ...p.pricing, ...updates } } : p,
+      ),
+    }))
   },
 
   addRoom: (projectId, type, name) => {
@@ -166,15 +192,29 @@ export const useAppStore = create<AppState>((set) => ({
       rooms: state.rooms.map((r) => (r.id === roomId ? { ...r, isComplete } : r)),
     }))
   },
+
+  addCatalogueItem: (item) => {
+    const newItem: CatalogueItem = { ...item, id: generateId('cat') }
+    set((state) => ({ catalogueItems: [newItem, ...state.catalogueItems] }))
+    return newItem
+  },
+
+  updateCatalogueItem: (itemId, updates) => {
+    set((state) => ({
+      catalogueItems: state.catalogueItems.map((item) =>
+        item.id === itemId ? { ...item, ...updates } : item,
+      ),
+    }))
+  },
+
+  setCatalogueItemActive: (itemId, isActive) => {
+    set((state) => ({
+      catalogueItems: state.catalogueItems.map((item) =>
+        item.id === itemId ? { ...item, isActive } : item,
+      ),
+    }))
+  },
 }))
-
-export function roomTotal(room: Room): number {
-  return room.items.reduce((sum, item) => sum + item.quantity * item.rate, 0)
-}
-
-export function projectTotal(rooms: Room[]): number {
-  return rooms.reduce((sum, room) => sum + roomTotal(room), 0)
-}
 
 export function roomArea(room: Room): number {
   return room.dimensions.lengthFt * room.dimensions.widthFt
