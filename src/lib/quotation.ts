@@ -8,6 +8,13 @@ import type { PricingConfig, Quotation, QuotationItem } from '@/types'
 // total (included vs excluded vs optional) and how they're grouped for the
 // builder and preview.
 
+export const QUOTATION_UNIT_LABEL: Record<string, string> = {
+  sqft: 'sqft',
+  rft: 'rft',
+  nos: 'nos',
+  'lump-sum': 'lump sum',
+}
+
 export function quotationItemAmount(item: Pick<QuotationItem, 'quantity' | 'rate' | 'unit'>): number {
   return calculateBaseAmount(item.quantity, item.rate, item.unit)
 }
@@ -73,4 +80,10 @@ export function generateQuotationNumber(existingQuotations: Quotation[], date: D
   const prefix = `QT-${date.getFullYear()}-`
   const sequence = existingQuotations.filter((q) => q.quotationNumber.startsWith(prefix)).length + 1
   return `${prefix}${String(sequence).padStart(3, '0')}`
+}
+
+/** e.g. "Aura-Interiors-QT-2026-001-Rev-1.pdf" — filesystem-safe, derived from the quotation's own number/revision. */
+export function quotationPdfFileName(quotation: Pick<Quotation, 'quotationNumber' | 'revision'>): string {
+  const safeNumber = quotation.quotationNumber.trim().replace(/[^a-zA-Z0-9-]+/g, '-')
+  return `Aura-Interiors-${safeNumber}-Rev-${quotation.revision}.pdf`
 }

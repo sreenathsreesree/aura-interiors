@@ -5,10 +5,12 @@ import {
   Check,
   ChevronDown,
   ChevronUp,
+  Download,
   Eye,
   FileText,
   Pencil,
   Plus,
+  Printer,
   Settings2,
   Trash2,
   X,
@@ -20,19 +22,18 @@ import { cn } from '@/lib/cn'
 import { useAppStore } from '@/store/useAppStore'
 import { useShallow } from 'zustand/react/shallow'
 import { calculateBaseAmount } from '@/lib/pricing'
-import { groupQuotationItemsByRoom, includedQuotationItems, quotationPricingBreakdown } from '@/lib/quotation'
+import {
+  QUOTATION_UNIT_LABEL,
+  groupQuotationItemsByRoom,
+  includedQuotationItems,
+  quotationPdfFileName,
+  quotationPricingBreakdown,
+} from '@/lib/quotation'
 import { formatCurrency } from '@/lib/format'
 import { QUOTATION_STATUS_META, QUOTATION_STATUS_OPTIONS } from '@/data/statusMeta'
 import { QuotationItemEditSheet } from './QuotationItemEditSheet'
 import { QuotationPreview } from './QuotationPreview'
 import type { CompanyProfile, PaymentMilestone, QuotationItem } from '@/types'
-
-const UNIT_LABEL: Record<string, string> = {
-  sqft: 'sqft',
-  rft: 'rft',
-  nos: 'nos',
-  'lump-sum': 'lump sum',
-}
 
 export function QuotationBuilderPage() {
   const { projectId } = useParams<{ projectId: string }>()
@@ -50,6 +51,7 @@ export function QuotationBuilderPage() {
   const [pricingOpen, setPricingOpen] = useState(false)
   const [previewOpen, setPreviewOpen] = useState(false)
   const [editingItem, setEditingItem] = useState<QuotationItem>()
+  const [isGeneratingPdf, setIsGeneratingPdf] = useState(false)
 
   const quotation = quotations[0]
 
@@ -161,6 +163,32 @@ export function QuotationBuilderPage() {
   }
 
   const milestoneTotalPercent = quotation.paymentMilestones.reduce((sum, m) => sum + m.percent, 0)
+
+  async function handleDownloadPdf() {
+    if (isGeneratingPdf || !quotation) return
+    setIsGeneratingPdf(true)
+    try {
+      // Loaded on demand — @react-pdf/renderer (plus fontkit) is sizeable and
+      // most visits to the Quotation Builder never touch PDF export.
+      const [{ pdf }, { QuotationPdfDocument }] = await Promise.all([
+        import('@react-pdf/renderer'),
+        import('./pdf/QuotationPdfDocument'),
+      ])
+      const blob = await pdf(<QuotationPdfDocument quotation={quotation} />).toBlob()
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = quotationPdfFileName(quotation)
+      link.click()
+      URL.revokeObjectURL(url)
+    } finally {
+      setIsGeneratingPdf(false)
+    }
+  }
+
+  function handlePrint() {
+    window.print()
+  }
 
   return (
     <div className="flex min-h-dvh flex-col lg:h-dvh lg:overflow-hidden">
@@ -367,7 +395,7 @@ export function QuotationBuilderPage() {
 
                                   <div className="flex items-center justify-between gap-2 pl-9">
                                     <p className="text-xs text-ink-500">
-                                      {item.quantity} {UNIT_LABEL[item.unit] ?? item.unit} ×{' '}
+                                      {item.quantity} {QUOTATION_UNIT_LABEL[item.unit] ?? item.unit} ×{' '}
                                       {formatCurrency(item.rate)}
                                       {item.rate !== item.sourceRate && (
                                         <span className="ml-1.5 text-terracotta-600">(overridden)</span>
@@ -539,14 +567,32 @@ export function QuotationBuilderPage() {
           </div>
         </div>
 
-        {/* RIGHT: live preview (desktop) */}
-        <div className="hidden bg-sand-100 lg:block lg:w-[44%] lg:overflow-y-auto lg:border-l lg:border-ink-100">
-          <QuotationPreview quotation={quotation} />
+        {/* RIGHT: live preview (desktop) — this is the same document the PDF renders from */}
+        <div className="hidden flex-col bg-sand-100 lg:flex lg:w-[44%] lg:border-l lg:border-ink-100">
+          <div className="flex shrink-0 items-center justify-between gap-2 border-b border-ink-100 bg-white px-5 py-3 print:hidden">
+            <p className="text-xs font-semibold uppercase tracking-wide text-ink-400">Live Preview</p>
+            <div className="flex items-center gap-2">
+              <Button variant="outline" size="md" icon={<Printer className="h-4 w-4" />} onClick={handlePrint}>
+                Print
+              </Button>
+              <Button
+                size="md"
+                icon={<Download className="h-4 w-4" />}
+                onClick={handleDownloadPdf}
+                disabled={isGeneratingPdf}
+              >
+                {isGeneratingPdf ? 'Preparing…' : 'Download PDF'}
+              </Button>
+            </div>
+          </div>
+          <div className="flex-1 overflow-y-auto">
+            <QuotationPreview quotation={quotation} />
+          </div>
         </div>
       </div>
 
       {/* Mobile: sticky preview action */}
-      <div className="sticky bottom-0 flex shrink-0 items-center justify-between gap-4 border-t border-ink-100 bg-white/95 px-5 py-4 backdrop-blur sm:px-8 lg:hidden">
+      <div className="sticky bottom-0 flex shrink-0 items-center justify-between gap-4 border-t border-ink-100 bg-white/95 px-5 py-4 backdrop-blur sm:px-8 lg:hidden print:hidden">
         <div className="min-w-0">
           <p className="text-xs font-medium text-ink-400">Grand Total</p>
           <p className="truncate font-display text-lg font-semibold text-brass-700">
@@ -560,11 +606,24 @@ export function QuotationBuilderPage() {
 
       {previewOpen && (
         <div className="fixed inset-0 z-50 flex flex-col bg-sand-100 lg:hidden">
-          <div className="flex shrink-0 items-center justify-between border-b border-ink-100 bg-white px-5 py-4">
-            <p className="font-display text-lg font-semibold text-ink-900">Quotation Preview</p>
-            <IconButton label="Close preview" variant="ghost" onClick={() => setPreviewOpen(false)}>
-              <X className="h-5 w-5" />
-            </IconButton>
+          <div className="flex shrink-0 items-center justify-between gap-1 border-b border-ink-100 bg-white px-5 py-4 print:hidden">
+            <p className="truncate font-display text-lg font-semibold text-ink-900">Quotation Preview</p>
+            <div className="flex shrink-0 items-center gap-1">
+              <IconButton label="Print" variant="ghost" onClick={handlePrint}>
+                <Printer className="h-5 w-5" />
+              </IconButton>
+              <IconButton
+                label="Download PDF"
+                variant="ghost"
+                onClick={handleDownloadPdf}
+                disabled={isGeneratingPdf}
+              >
+                <Download className="h-5 w-5" />
+              </IconButton>
+              <IconButton label="Close preview" variant="ghost" onClick={() => setPreviewOpen(false)}>
+                <X className="h-5 w-5" />
+              </IconButton>
+            </div>
           </div>
           <div className="flex-1 overflow-y-auto">
             <QuotationPreview quotation={quotation} />

@@ -108,3 +108,22 @@
     scrollbar-width: none;
   }
 }
+
+/* Printing a Quotation prints only the on-screen preview (the same
+   document the PDF renders from), not the surrounding builder chrome. */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  .quotation-print-area,
+  .quotation-print-area * {
+    visibility: visible;
+  }
+  .quotation-print-area {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    max-width: none;
+    margin: 0;
+  }
+}
