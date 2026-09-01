@@ -2,9 +2,11 @@ import { useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
   ArrowLeft,
+  ChevronRight,
   Plus,
   Trash2,
   Pencil,
+  PenTool,
   Ruler,
   ListChecks,
   PackagePlus,
@@ -187,6 +189,13 @@ export function RoomBuilderPage() {
             <Badge tone={room.isComplete ? 'success' : 'neutral'}>
               {room.isComplete ? 'Complete' : 'In Progress'}
             </Badge>
+            <IconButton
+              label="AURA Canvas"
+              variant="default"
+              onClick={() => navigate(`/projects/${project.id}/rooms/${room.id}/canvas`)}
+            >
+              <PenTool className="h-5 w-5" />
+            </IconButton>
             <IconButton label="Delete room" variant="danger" onClick={handleDeleteRoom}>
               <Trash2 className="h-5 w-5" />
             </IconButton>
@@ -195,6 +204,22 @@ export function RoomBuilderPage() {
 
         <div className="flex-1 overflow-y-auto px-5 py-6 pb-40 sm:px-8">
           <div className="mx-auto flex max-w-3xl flex-col gap-6">
+            <button
+              onClick={() => navigate(`/projects/${project.id}/rooms/${room.id}/canvas`)}
+              className="flex w-full items-center justify-between rounded-[--radius-lg] border-2 border-ink-900 bg-ink-900 px-5 py-4 text-left transition-colors hover:bg-ink-800"
+            >
+              <span className="flex items-center gap-3">
+                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[--radius-md] bg-brass-500/20 text-brass-400">
+                  <PenTool className="h-5 w-5" />
+                </span>
+                <span>
+                  <span className="block text-sm font-semibold text-sand-50">AURA Canvas</span>
+                  <span className="block text-xs text-sand-300">2D drawing workspace for this room</span>
+                </span>
+              </span>
+              <ChevronRight className="h-5 w-5 shrink-0 text-sand-400" />
+            </button>
+
             {/* Dimensions */}
             <Card>
               <div className="mb-4 flex items-center gap-2.5">

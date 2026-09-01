@@ -11,6 +11,7 @@ import { RoomBuilderPage } from '@/features/rooms/RoomBuilderPage'
 import { CataloguePage } from '@/features/catalogue/CataloguePage'
 import { BoqPage } from '@/features/boq/BoqPage'
 import { QuotationBuilderPage } from '@/features/quotation/QuotationBuilderPage'
+import { AuraCanvasPage } from '@/features/canvas/AuraCanvasPage'
 
 function App() {
   return (
@@ -29,6 +30,7 @@ function App() {
         <Route path="/projects/:projectId/rooms/:roomId" element={<RoomBuilderPage />} />
         <Route path="/projects/:projectId/boq" element={<BoqPage />} />
         <Route path="/projects/:projectId/quotation" element={<QuotationBuilderPage />} />
+        <Route path="/projects/:projectId/rooms/:roomId/canvas" element={<AuraCanvasPage />} />
       </Route>
 
       <Route path="*" element={<Navigate to="/" replace />} />
