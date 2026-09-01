@@ -1,9 +1,14 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { ArrowDown, ArrowUp, ChevronsDown, ChevronsUp, Eye, EyeOff, Lock, LockOpen, Plus } from 'lucide-react'
 import { cn } from '@/lib/cn'
 import { NumberStepper } from '@/components/ui'
 import type { CanvasEngine, CanvasEngineSnapshot } from '@/lib/canvasEngine'
+import { getMaterialById } from '@/data/materials'
+import { getMaterialThumbnailDataUrl } from '@/lib/materialPatterns'
+import type { CanvasObject } from '@/types/canvas'
+import { AnchoredPopover } from './AnchoredPopover'
 import { ColorPickerContent } from './ColorPicker'
+import { MaterialPickerContent } from './MaterialPanel'
 
 interface Props {
   engine: CanvasEngine
@@ -34,6 +39,8 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 
 export function PropertyPanel({ engine, snapshot, className }: Props) {
   const [swatchOpen, setSwatchOpen] = useState<'fill' | 'stroke' | null>(null)
+  const fillSwatchRef = useRef<HTMLButtonElement>(null)
+  const strokeSwatchRef = useRef<HTMLButtonElement>(null)
   const selected = snapshot.selectedObjects
   const single = selected.length === 1 ? selected[0] : null
   const first = selected[0]
@@ -103,33 +110,35 @@ export function PropertyPanel({ engine, snapshot, className }: Props) {
 
           <Section title="Appearance">
             <div className="flex flex-col gap-3">
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-medium text-ink-600">Fill</span>
-                <div className="relative">
-                  <button
-                    onClick={() => setSwatchOpen(swatchOpen === 'fill' ? null : 'fill')}
-                    className="h-8 w-8 rounded-full border-2 border-white shadow-[0_0_0_1px_rgba(0,0,0,0.15)]"
-                    style={{ background: first.fill === 'none' ? 'transparent' : first.fill }}
-                    aria-label="Edit fill color"
-                  />
-                  {swatchOpen === 'fill' && (
-                    <div className="fixed inset-0 z-30" onClick={() => setSwatchOpen(null)}>
-                      <div
-                        className="absolute right-4 top-24 z-40 rounded-[--radius-lg] border border-ink-100 bg-white p-4 shadow-[--shadow-float]"
-                        onClick={(e) => e.stopPropagation()}
-                      >
+              {first.fillType === 'color' ? (
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium text-ink-600">Colour</span>
+                  <div className="relative">
+                    <button
+                      ref={fillSwatchRef}
+                      onClick={() => setSwatchOpen(swatchOpen === 'fill' ? null : 'fill')}
+                      className="h-8 w-8 rounded-full border-2 border-white shadow-[0_0_0_1px_rgba(0,0,0,0.15)]"
+                      style={{ background: first.fill === 'none' ? 'transparent' : first.fill }}
+                      aria-label="Edit fill color"
+                    />
+                    {swatchOpen === 'fill' && (
+                      <AnchoredPopover anchorRef={fillSwatchRef} side="left" onClose={() => setSwatchOpen(null)}>
                         <ColorPickerContent
                           color={first.fill}
                           opacity={first.opacity}
                           recentColors={snapshot.recentColors}
-                          onChangeColor={(c) => engine.updateSelectedProps({ fill: c, fillType: 'color' })}
+                          onChangeColor={(c) =>
+                            engine.updateSelectedProps({ fill: c, fillType: 'color', materialId: undefined, imageData: undefined, fillFit: undefined })
+                          }
                           onChangeOpacity={(o) => engine.updateSelectedProps({ opacity: o })}
                         />
-                      </div>
-                    </div>
-                  )}
+                      </AnchoredPopover>
+                    )}
+                  </div>
                 </div>
-              </div>
+              ) : (
+                <MaterialFillControls engine={engine} object={first} />
+              )}
 
               <div className="flex items-center justify-between">
                 <span className="text-sm font-medium text-ink-600">Stroke</span>
@@ -146,26 +155,22 @@ export function PropertyPanel({ engine, snapshot, className }: Props) {
                   </button>
                   <div className="relative">
                     <button
+                      ref={strokeSwatchRef}
                       onClick={() => setSwatchOpen(swatchOpen === 'stroke' ? null : 'stroke')}
                       className="h-8 w-8 rounded-full border-2 border-white shadow-[0_0_0_1px_rgba(0,0,0,0.15)]"
                       style={{ background: first.stroke }}
                       aria-label="Edit stroke color"
                     />
                     {swatchOpen === 'stroke' && (
-                      <div className="fixed inset-0 z-30" onClick={() => setSwatchOpen(null)}>
-                        <div
-                          className="absolute right-4 top-24 z-40 rounded-[--radius-lg] border border-ink-100 bg-white p-4 shadow-[--shadow-float]"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <ColorPickerContent
-                            color={first.stroke}
-                            opacity={1}
-                            recentColors={snapshot.recentColors}
-                            onChangeColor={(c) => engine.updateSelectedProps({ stroke: c })}
-                            onChangeOpacity={() => {}}
-                          />
-                        </div>
-                      </div>
+                      <AnchoredPopover anchorRef={strokeSwatchRef} side="left" onClose={() => setSwatchOpen(null)}>
+                        <ColorPickerContent
+                          color={first.stroke}
+                          opacity={1}
+                          recentColors={snapshot.recentColors}
+                          onChangeColor={(c) => engine.updateSelectedProps({ stroke: c })}
+                          onChangeOpacity={() => {}}
+                        />
+                      </AnchoredPopover>
                     )}
                   </div>
                 </div>
@@ -226,6 +231,90 @@ export function PropertyPanel({ engine, snapshot, className }: Props) {
       )}
 
       <LayersList engine={engine} snapshot={snapshot} />
+    </div>
+  )
+}
+
+/** Material/Type/Scale/Rotation/Offset/Opacity controls for a texture- or image-filled object. Opacity itself is handled by the shared slider further down in Appearance. */
+function MaterialFillControls({ engine, object }: { engine: CanvasEngine; object: CanvasObject }) {
+  const [pickerOpen, setPickerOpen] = useState(false)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const isImage = object.fillType === 'image'
+  const material = object.materialId ? getMaterialById(object.materialId) : undefined
+  const scale = object.textureScale ?? 1
+  const rotation = object.textureRotation ?? 0
+  const offset = object.textureOffset ?? { x: 0, y: 0 }
+
+  return (
+    <div className="flex flex-col gap-3 rounded-[--radius-md] border border-ink-100 bg-sand-50 p-3">
+      <div className="flex items-center justify-between">
+        <span className="text-sm font-medium text-ink-600">{isImage ? 'Image' : 'Material'}</span>
+        <div className="relative">
+          <button
+            ref={triggerRef}
+            onClick={() => setPickerOpen((v) => !v)}
+            className="flex items-center gap-2 rounded-md border border-ink-200 bg-white px-2 py-1.5 text-xs font-semibold text-ink-700 hover:border-ink-400"
+          >
+            <span
+              className="h-6 w-6 shrink-0 rounded-[--radius-sm] border border-ink-100 bg-cover bg-center"
+              style={{ backgroundImage: `url(${isImage ? object.imageData : material ? getMaterialThumbnailDataUrl(material) : ''})` }}
+            />
+            <span className="max-w-24 truncate">{isImage ? 'Custom Image' : (material?.name ?? 'Material')}</span>
+          </button>
+          {pickerOpen && (
+            <AnchoredPopover anchorRef={triggerRef} side="left" onClose={() => setPickerOpen(false)}>
+              <p className="mb-3 font-display text-sm font-semibold text-ink-900">Materials</p>
+              <MaterialPickerContent
+                activeMaterialId={object.materialId}
+                onSelectMaterial={(m) => {
+                  engine.setActiveMaterial(m)
+                  setPickerOpen(false)
+                }}
+                onUseImage={(dataUrl) => {
+                  engine.setImageFillOnSelection(dataUrl)
+                  setPickerOpen(false)
+                }}
+              />
+            </AnchoredPopover>
+          )}
+        </div>
+      </div>
+
+      {isImage && (
+        <div className="flex gap-1.5">
+          {(['cover', 'contain', 'tile'] as const).map((fit) => (
+            <button
+              key={fit}
+              onClick={() => engine.updateSelectedProps({ fillFit: fit })}
+              className={cn(
+                'h-8 flex-1 rounded-md border-2 text-[11px] font-semibold capitalize',
+                (object.fillFit ?? 'cover') === fit ? 'border-ink-900 bg-ink-900 text-sand-50' : 'border-ink-100 bg-white text-ink-600',
+              )}
+            >
+              {fit}
+            </button>
+          ))}
+        </div>
+      )}
+
+      <div className="grid grid-cols-2 gap-2.5">
+        <NumberStepper label="Scale" value={Number(scale.toFixed(2))} onChange={(v) => engine.updateSelectedProps({ textureScale: Math.max(0.1, v) })} step={0.1} />
+        <NumberStepper
+          label="Rotation °"
+          value={Math.round(rotation)}
+          onChange={(v) => engine.updateSelectedProps({ textureRotation: ((v % 360) + 360) % 360 })}
+          step={15}
+        />
+        <NumberStepper label="Offset X" value={Math.round(offset.x)} onChange={(v) => engine.updateSelectedProps({ textureOffset: { x: v, y: offset.y } })} step={5} />
+        <NumberStepper label="Offset Y" value={Math.round(offset.y)} onChange={(v) => engine.updateSelectedProps({ textureOffset: { x: offset.x, y: v } })} step={5} />
+      </div>
+
+      <button
+        onClick={() => engine.removeFillOverride()}
+        className="h-9 rounded-md border-2 border-dashed border-ink-300 text-xs font-semibold text-ink-500 hover:border-ink-500"
+      >
+        Remove {isImage ? 'Image' : 'Material'}
+      </button>
     </div>
   )
 }

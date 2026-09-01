@@ -58,8 +58,11 @@ export type ReservedObjectType =
 
 export type CanvasObjectType = DrawableObjectType | ReservedObjectType
 
-/** color | texture | image — only 'color' is actually implemented in V1. */
+/** color | texture | image — V1 shipped 'color' only; V2 adds texture + image. */
 export type FillType = 'color' | 'texture' | 'image'
+
+/** How a custom image fill is fitted inside its shape (texture fills always tile). */
+export type FillFit = 'tile' | 'cover' | 'contain'
 
 export interface Point {
   x: number
@@ -111,9 +114,13 @@ export interface CanvasObject {
   dimensionValue?: number // mm, real-world length
   dimensionLabel?: string // optional manual override
 
-  // Texture/image fill — foundation only (AURA CANVAS V2 fills these in).
-  textureId?: string
-  imageId?: string
+  // Texture/image fill (AURA CANVAS V2).
+  /** Set when fillType is 'texture' (or a Colours-category material was applied via the Material Panel) — id into the material catalogue. */
+  materialId?: string
+  /** Set when fillType is 'image' — the custom image itself, as a downscaled data URI (so save/reload never depends on a blob URL or external file). */
+  imageData?: string
+  /** Custom image only; texture fills always tile. */
+  fillFit?: FillFit
   textureScale?: number
   textureOffset?: Point
   textureRotation?: number

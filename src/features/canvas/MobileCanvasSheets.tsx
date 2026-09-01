@@ -6,10 +6,10 @@ import {
   FlipHorizontal,
   Grid3x3,
   Group,
-  Image,
   Lock,
   LockOpen,
   Magnet,
+  Palette,
   Pipette,
   RotateCw,
   Trash2,
@@ -18,8 +18,10 @@ import {
 import { cn } from '@/lib/cn'
 import { Sheet } from '@/components/ui'
 import type { CanvasEngine, CanvasEngineSnapshot } from '@/lib/canvasEngine'
+import { getMaterialThumbnailDataUrl } from '@/lib/materialPatterns'
 import { DRAW_TOOLS } from './CanvasToolbars'
 import { ColorPickerContent } from './ColorPicker'
+import { MaterialPickerContent } from './MaterialPanel'
 import { PropertyPanel } from './PropertyPanel'
 
 interface Props {
@@ -32,6 +34,7 @@ interface Props {
 /** iPhone: the full left-toolbar content reflowed into a touch-friendly grid inside a sheet. */
 export function MobileToolSheet({ engine, snapshot, open, onClose }: Props) {
   const [fillOpen, setFillOpen] = useState(false)
+  const [materialOpen, setMaterialOpen] = useState(false)
   const hasSelection = snapshot.selection.length > 0
   const selectedLocked = snapshot.selectedObjects.some((o) => o.locked)
 
@@ -65,18 +68,41 @@ export function MobileToolSheet({ engine, snapshot, open, onClose }: Props) {
           <div className="flex flex-wrap items-center gap-2.5">
             <button
               onClick={() => {
-                engine.setTool('fill')
+                // setTool() clears the current selection — only arm the
+                // paint-bucket when there's nothing selected to recolour instead.
+                if (snapshot.selection.length === 0) engine.setTool('fill')
                 setFillOpen((v) => !v)
+                setMaterialOpen(false)
               }}
               className={cn(
                 'flex h-11 items-center gap-2 rounded-full border-2 px-4 text-sm font-semibold',
-                snapshot.tool === 'fill' ? 'border-ink-900 bg-ink-900 text-sand-50' : 'border-ink-100 text-ink-600',
+                snapshot.tool === 'fill' && !snapshot.activeMaterial ? 'border-ink-900 bg-ink-900 text-sand-50' : 'border-ink-100 text-ink-600',
               )}
             >
               <span className="h-5 w-5 rounded-full border border-ink-300" style={{ background: snapshot.activeFill === 'none' ? 'transparent' : snapshot.activeFill }} />
               Fill Color
             </button>
-            <MobileToolChip icon={<Image className="h-4 w-4" />} label="Texture" disabled />
+            <button
+              onClick={() => {
+                if (snapshot.selection.length === 0) engine.setTool('fill')
+                setMaterialOpen((v) => !v)
+                setFillOpen(false)
+              }}
+              className={cn(
+                'flex h-11 items-center gap-2 rounded-full border-2 px-4 text-sm font-semibold',
+                snapshot.tool === 'fill' && snapshot.activeMaterial ? 'border-ink-900 bg-ink-900 text-sand-50' : 'border-ink-100 text-ink-600',
+              )}
+            >
+              {snapshot.activeMaterial ? (
+                <span
+                  className="h-5 w-5 rounded-full border border-ink-300 bg-cover bg-center"
+                  style={{ backgroundImage: `url(${getMaterialThumbnailDataUrl(snapshot.activeMaterial)})` }}
+                />
+              ) : (
+                <Palette className="h-4 w-4" />
+              )}
+              Materials
+            </button>
             <MobileToolChip
               icon={<Pipette className="h-4 w-4" />}
               label="Eyedropper"
@@ -95,6 +121,17 @@ export function MobileToolSheet({ engine, snapshot, open, onClose }: Props) {
                 recentColors={snapshot.recentColors}
                 onChangeColor={(c) => engine.setActiveFill(c)}
                 onChangeOpacity={(o) => engine.setActiveOpacity(o)}
+              />
+            </div>
+          )}
+          {materialOpen && (
+            <div className="mt-3 rounded-[--radius-lg] border border-ink-100 bg-sand-50 p-3.5">
+              <MaterialPickerContent
+                activeMaterialId={snapshot.activeMaterial?.id}
+                onSelectMaterial={(m) => engine.setActiveMaterial(m)}
+                onUseImage={(dataUrl) => {
+                  if (snapshot.selection.length > 0) engine.setImageFillOnSelection(dataUrl)
+                }}
               />
             </div>
           )}

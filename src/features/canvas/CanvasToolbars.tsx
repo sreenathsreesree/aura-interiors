@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import {
   ArrowLeft,
   Circle,
@@ -10,13 +10,13 @@ import {
   Grid3x3,
   Group,
   Hand,
-  Image,
   Lock,
   LockOpen,
   Magnet,
   Maximize,
   Minus,
   MousePointer2,
+  Palette,
   Pentagon,
   PenTool,
   Pipette,
@@ -38,9 +38,11 @@ import {
 import { cn } from '@/lib/cn'
 import type { CanvasEngine, CanvasEngineSnapshot } from '@/lib/canvasEngine'
 import { formatDimension } from '@/lib/canvasEngine'
+import { getMaterialThumbnailDataUrl } from '@/lib/materialPatterns'
 import type { CanvasToolId } from '@/types/canvas'
 import { ToolButton } from './ToolButton'
 import { ColorPickerPopover } from './ColorPicker'
+import { MaterialPickerPopover } from './MaterialPanel'
 
 interface EngineProps {
   engine: CanvasEngine
@@ -123,6 +125,9 @@ export const DRAW_TOOLS: { id: CanvasToolId; icon: React.ReactNode; label: strin
 // ------------------------------------------------------------- Left Toolbar
 export function CanvasLeftToolbar({ engine, snapshot }: EngineProps) {
   const [fillPickerOpen, setFillPickerOpen] = useState(false)
+  const [materialPickerOpen, setMaterialPickerOpen] = useState(false)
+  const fillAnchorRef = useRef<HTMLDivElement>(null)
+  const materialAnchorRef = useRef<HTMLDivElement>(null)
   const hasSelection = snapshot.selection.length > 0
   const selectedLocked = snapshot.selectedObjects.some((o) => o.locked)
 
@@ -134,18 +139,23 @@ export function CanvasLeftToolbar({ engine, snapshot }: EngineProps) {
 
       <div className="my-1.5 h-px w-8 shrink-0 bg-white/10" />
 
-      <div className="relative">
+      <div ref={fillAnchorRef} className="relative">
         <ToolButton
           icon={<div className="h-5 w-5 rounded-full border border-white/40" style={{ background: snapshot.activeFill === 'none' ? 'transparent' : snapshot.activeFill }} />}
           label="Fill Color"
           active={snapshot.tool === 'fill' || fillPickerOpen}
           onClick={() => {
-            engine.setTool('fill')
+            // setTool() clears the current selection (it's a real tool switch
+            // for every other case) — but with something already selected, the
+            // point of opening this is to recolour it, so arm the paint-bucket
+            // only when there's nothing selected to apply to instead.
+            if (snapshot.selection.length === 0) engine.setTool('fill')
             setFillPickerOpen((v) => !v)
           }}
         />
         {fillPickerOpen && (
           <ColorPickerPopover
+            anchorRef={fillAnchorRef}
             title="Fill Color"
             color={snapshot.activeFill}
             opacity={snapshot.activeOpacity}
@@ -156,7 +166,38 @@ export function CanvasLeftToolbar({ engine, snapshot }: EngineProps) {
           />
         )}
       </div>
-      <ToolButton icon={<Image className="h-5 w-5" />} label="Texture Fill — coming in AURA CANVAS V2" disabled onClick={() => {}} />
+      <div ref={materialAnchorRef} className="relative">
+        <ToolButton
+          icon={
+            snapshot.activeMaterial ? (
+              <span
+                className="h-5 w-5 rounded-full border border-white/40 bg-cover bg-center"
+                style={{ backgroundImage: `url(${getMaterialThumbnailDataUrl(snapshot.activeMaterial)})` }}
+              />
+            ) : (
+              <Palette className="h-5 w-5" />
+            )
+          }
+          label="Materials"
+          active={(snapshot.tool === 'fill' && Boolean(snapshot.activeMaterial)) || materialPickerOpen}
+          onClick={() => {
+            // See the matching comment on Fill Color above.
+            if (snapshot.selection.length === 0) engine.setTool('fill')
+            setMaterialPickerOpen((v) => !v)
+          }}
+        />
+        {materialPickerOpen && (
+          <MaterialPickerPopover
+            anchorRef={materialAnchorRef}
+            activeMaterialId={snapshot.activeMaterial?.id}
+            onSelectMaterial={(m) => engine.setActiveMaterial(m)}
+            onUseImage={(dataUrl) => {
+              if (snapshot.selection.length > 0) engine.setImageFillOnSelection(dataUrl)
+            }}
+            onClose={() => setMaterialPickerOpen(false)}
+          />
+        )}
+      </div>
       <ToolButton icon={<Pipette className="h-5 w-5" />} label="Eyedropper" active={snapshot.tool === 'eyedropper'} onClick={() => engine.setTool('eyedropper')} />
 
       <div className="my-1.5 h-px w-8 shrink-0 bg-white/10" />

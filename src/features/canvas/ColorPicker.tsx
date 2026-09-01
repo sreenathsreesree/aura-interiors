@@ -1,4 +1,6 @@
+import type { RefObject } from 'react'
 import { cn } from '@/lib/cn'
+import { AnchoredPopover } from './AnchoredPopover'
 
 export const PRESET_COLORS = [
   '#221f1b',
@@ -30,6 +32,12 @@ function ColorSwatch({ color, onClick, active }: Swatch) {
     <button
       type="button"
       onClick={onClick}
+      // Swatches live inside popovers nested in scrollable toolbars/panels — a
+      // default click-to-focus here makes the browser auto-scroll that
+      // ancestor to reveal the (invisibly, absolutely-positioned) swatch,
+      // which visibly yanks the whole toolbar out of place. Suppressing the
+      // focus keeps the click purely a colour pick with no side effect.
+      onMouseDown={(e) => e.preventDefault()}
       aria-label={color}
       className={cn(
         'h-7 w-7 shrink-0 rounded-full border-2 transition-transform active:scale-90',
@@ -70,6 +78,7 @@ export function ColorPickerContent({ color, opacity, onChangeColor, onChangeOpac
         <button
           type="button"
           onClick={() => onChangeColor('none')}
+          onMouseDown={(e) => e.preventDefault()}
           className={cn(
             'h-9 flex-1 rounded-md border-2 text-xs font-semibold transition-colors',
             color === 'none' ? 'border-ink-900 bg-ink-900 text-sand-50' : 'border-ink-200 text-ink-600',
@@ -112,17 +121,15 @@ export function ColorPickerContent({ color, opacity, onChangeColor, onChangeOpac
 interface ColorPickerPopoverProps extends ColorPickerContentProps {
   onClose: () => void
   title: string
+  anchorRef: RefObject<HTMLElement | null>
+  side?: 'right' | 'left'
 }
 
-/** Anchored popover — the caller must wrap the trigger + this in a `relative` element. */
-export function ColorPickerPopover({ onClose, title, ...contentProps }: ColorPickerPopoverProps) {
+export function ColorPickerPopover({ onClose, title, anchorRef, side, ...contentProps }: ColorPickerPopoverProps) {
   return (
-    <>
-      <div className="fixed inset-0 z-30" onClick={onClose} />
-      <div className="absolute left-full top-0 z-40 ml-2 rounded-[--radius-lg] border border-ink-100 bg-white p-4 shadow-[--shadow-float]">
-        <p className="mb-3 font-display text-sm font-semibold text-ink-900">{title}</p>
-        <ColorPickerContent {...contentProps} />
-      </div>
-    </>
+    <AnchoredPopover anchorRef={anchorRef} onClose={onClose} side={side}>
+      <p className="mb-3 font-display text-sm font-semibold text-ink-900">{title}</p>
+      <ColorPickerContent {...contentProps} />
+    </AnchoredPopover>
   )
 }

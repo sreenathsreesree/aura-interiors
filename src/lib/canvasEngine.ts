@@ -21,9 +21,14 @@ import type {
   CanvasSettings,
   CanvasToolId,
   CanvasUnit,
+  FillFit,
   Point,
 } from '@/types/canvas'
 import { CLOSED_SHAPE_TYPES } from '@/types/canvas'
+import type { Material } from '@/types/materials'
+import { getMaterialById } from '@/data/materials'
+import { getMaterialPatternCanvas } from '@/lib/materialPatterns'
+import { getCachedImage, onImageReady } from '@/lib/imageUtils'
 
 const MIN_SIZE = 20 // mm — smallest a drawn shape can collapse to
 const HANDLE_SCREEN_SIZE = 16 // px
@@ -83,6 +88,7 @@ export interface CanvasEngineSnapshot {
   activeStroke: string
   activeStrokeWidth: number
   activeOpacity: number
+  activeMaterial: Material | null
   recentColors: string[]
   drawingPolygon: boolean
   polygonPointCount: number
@@ -132,6 +138,7 @@ export class CanvasEngine {
   private activeStroke = '#221f1b'
   private activeStrokeWidth = 6
   private activeOpacity = 1
+  private activeMaterial: Material | null = null
   private recentColors: string[] = []
   private clipboard: CanvasObject[] = []
   private editingTextId: string | null = null
@@ -173,6 +180,7 @@ export class CanvasEngine {
       activeStroke: this.activeStroke,
       activeStrokeWidth: this.activeStrokeWidth,
       activeOpacity: this.activeOpacity,
+      activeMaterial: this.activeMaterial,
       recentColors: this.recentColors,
       drawingPolygon: this.draft?.type === 'polygon',
       polygonPointCount: this.draft?.type === 'polygon' ? this.draft.points.length : 0,
@@ -358,8 +366,96 @@ export class CanvasEngine {
 
   setActiveFill(color: string) {
     this.activeFill = color
+    this.activeMaterial = null
     this.pushRecentColor(color)
-    if (this.selection.length > 0) this.applyToSelection((o) => ({ ...o, fill: color, fillType: 'color' }))
+    if (this.selection.length > 0) {
+      this.applyToSelection((o) => ({
+        ...o,
+        fill: color,
+        fillType: 'color',
+        materialId: undefined,
+        imageData: undefined,
+        fillFit: undefined,
+      }))
+    }
+    this.notify()
+    this.scheduleRender()
+  }
+
+  /** Builds the fill patch for applying `material` to an object — shared by setActiveMaterial and the Paint/Fill tool. */
+  private materialFillPatch(material: Material): Partial<CanvasObject> {
+    if (material.type === 'colour') {
+      return {
+        fillType: 'color',
+        fill: material.baseColor,
+        materialId: material.id,
+        imageData: undefined,
+        fillFit: undefined,
+      }
+    }
+    return {
+      fillType: 'texture',
+      fill: material.baseColor,
+      materialId: material.id,
+      imageData: undefined,
+      fillFit: undefined,
+      textureScale: 1,
+      textureRotation: 0,
+      textureOffset: { x: 0, y: 0 },
+    }
+  }
+
+  /** Sets the active material (used by the Material Panel + Paint/Fill tool) and, if anything is selected, applies it immediately. */
+  setActiveMaterial(material: Material) {
+    this.activeMaterial = material
+    if (material.type === 'colour') {
+      this.activeFill = material.baseColor
+      this.pushRecentColor(material.baseColor)
+    }
+    if (this.selection.length > 0) {
+      const patch = this.materialFillPatch(material)
+      this.applyToSelection((o) => (CLOSED_SHAPE_TYPES.includes(o.type) ? { ...o, ...patch } : o))
+    }
+    this.notify()
+    this.scheduleRender()
+  }
+
+  clearActiveMaterial() {
+    this.activeMaterial = null
+    this.notify()
+  }
+
+  /** Reverts the selection's fill to a plain colour — used by both "Remove Material" and "Remove Image". The object stays a normal editable vector shape. */
+  removeFillOverride() {
+    if (this.selection.length === 0) return
+    this.applyToSelection((o) => ({
+      ...o,
+      fillType: 'color',
+      materialId: undefined,
+      imageData: undefined,
+      fillFit: undefined,
+    }))
+    this.notify()
+    this.scheduleRender()
+  }
+
+  /** Applies a custom image (already downscaled to a data URI by lib/imageUtils) as the selection's fill. */
+  setImageFillOnSelection(dataUrl: string, fit: FillFit = 'cover') {
+    if (this.selection.length === 0) return
+    getCachedImage(dataUrl) // kick off decode now so the first paint after this call can already show it
+    this.applyToSelection((o) => {
+      if (!CLOSED_SHAPE_TYPES.includes(o.type)) return o
+      return {
+        ...o,
+        fillType: 'image',
+        imageData: dataUrl,
+        materialId: undefined,
+        fillFit: fit,
+        textureScale: o.textureScale ?? 1,
+        textureRotation: o.textureRotation ?? 0,
+        textureOffset: o.textureOffset ?? { x: 0, y: 0 },
+      }
+    })
     this.notify()
     this.scheduleRender()
   }
@@ -659,11 +755,12 @@ export class CanvasEngine {
     const target = this.hitTestClosedShape(worldPt)
     if (!target) return
     const before = this.snapshot()
+    const patch: Partial<CanvasObject> = this.activeMaterial
+      ? this.materialFillPatch(this.activeMaterial)
+      : { fill: this.activeFill, fillType: 'color', materialId: undefined, imageData: undefined, fillFit: undefined, opacity: this.activeOpacity }
     this.doc = {
       ...this.doc,
-      objects: this.doc.objects.map((o) =>
-        o.id === target.id ? { ...o, fill: this.activeFill, fillType: 'color', opacity: this.activeOpacity } : o,
-      ),
+      objects: this.doc.objects.map((o) => (o.id === target.id ? { ...o, ...patch } : o)),
     }
     this.commit(before)
     this.notify()
@@ -673,8 +770,12 @@ export class CanvasEngine {
   private pickColorAt(worldPt: Point) {
     const target = this.hitTest(worldPt)
     if (!target) return
+    // Colour eyedropper always captures the object's flat colour, unchanged from V1.
     this.activeFill = target.fill
     this.pushRecentColor(target.fill)
+    // Material/image objects additionally hand back their material, where one exists,
+    // so a filled shape's look can be reused elsewhere without breaking the colour capture above.
+    this.activeMaterial = target.fillType === 'texture' && target.materialId ? (getMaterialById(target.materialId) ?? null) : null
     this.tool = 'select'
     this.notify()
   }
@@ -1265,13 +1366,13 @@ export class CanvasEngine {
       case 'square':
         ctx.beginPath()
         ctx.rect(-hw, -hh, o.width, o.height)
-        if (o.fillType === 'color' && o.fill !== 'none') ctx.fill()
+        this.paintClosedFill(ctx, o, hw, hh)
         if (o.strokeEnabled) ctx.stroke()
         break
       case 'circle':
         ctx.beginPath()
         ctx.ellipse(0, 0, Math.max(hw, 0.01), Math.max(hh, 0.01), 0, 0, Math.PI * 2)
-        if (o.fillType === 'color' && o.fill !== 'none') ctx.fill()
+        this.paintClosedFill(ctx, o, hw, hh)
         if (o.strokeEnabled) ctx.stroke()
         break
       case 'polygon': {
@@ -1281,7 +1382,7 @@ export class CanvasEngine {
         ctx.moveTo(pts[0].x, pts[0].y)
         for (const p of pts.slice(1)) ctx.lineTo(p.x, p.y)
         ctx.closePath()
-        if (o.fillType === 'color' && o.fill !== 'none') ctx.fill()
+        this.paintClosedFill(ctx, o, hw, hh)
         if (o.strokeEnabled) ctx.stroke()
         break
       }
@@ -1364,6 +1465,90 @@ export class CanvasEngine {
         if (o.strokeEnabled) ctx.stroke()
     }
     ctx.restore()
+  }
+
+  /**
+   * Paints the fill for a closed shape whose path is already on `ctx`
+   * (rect/ellipse/polygon, not yet stroked). Colour fills are unchanged from
+   * V1; texture/image fills are painted live every frame from the material
+   * catalogue / cached image — the object itself never gets rasterized, it
+   * just gets a different paint each render.
+   */
+  private paintClosedFill(ctx: CanvasRenderingContext2D, o: CanvasObject, hw: number, hh: number) {
+    if (o.fillType === 'color') {
+      if (o.fill !== 'none') {
+        ctx.fillStyle = o.fill
+        ctx.fill()
+      }
+      return
+    }
+
+    if (o.fillType === 'texture' && o.materialId) {
+      const material = getMaterialById(o.materialId)
+      const pattern = material ? ctx.createPattern(getMaterialPatternCanvas(material), 'repeat') : null
+      if (pattern) {
+        const scale = o.textureScale ?? 1
+        const rot = degToRadLocal(o.textureRotation ?? 0)
+        const offset = o.textureOffset ?? { x: 0, y: 0 }
+        const cos = Math.cos(rot)
+        const sin = Math.sin(rot)
+        pattern.setTransform(new DOMMatrix([cos * scale, sin * scale, -sin * scale, cos * scale, offset.x, offset.y]))
+        ctx.save()
+        ctx.fillStyle = pattern
+        ctx.fill()
+        ctx.restore()
+        return
+      }
+      // Material removed from the catalogue since this was saved — fall back to its stored flat colour.
+      if (o.fill !== 'none') {
+        ctx.fillStyle = o.fill
+        ctx.fill()
+      }
+      return
+    }
+
+    if (o.fillType === 'image' && o.imageData) {
+      const img = getCachedImage(o.imageData)
+      if (!img) {
+        // Still decoding — paint a neutral placeholder and repaint once it's ready.
+        ctx.fillStyle = o.fill !== 'none' ? o.fill : '#d8d3c8'
+        ctx.fill()
+        onImageReady(o.imageData, () => this.scheduleRender())
+        return
+      }
+      ctx.save()
+      ctx.clip()
+      const scale = o.textureScale ?? 1
+      const rot = degToRadLocal(o.textureRotation ?? 0)
+      const offset = o.textureOffset ?? { x: 0, y: 0 }
+      ctx.translate(offset.x, offset.y)
+      ctx.rotate(rot)
+      const fit = o.fillFit ?? 'cover'
+      if (fit === 'tile') {
+        const pattern = ctx.createPattern(img, 'repeat')
+        if (pattern) {
+          pattern.setTransform(new DOMMatrix().scale(scale))
+          ctx.fillStyle = pattern
+          ctx.fillRect(-hw * 2, -hh * 2, hw * 4, hh * 4)
+        }
+      } else {
+        const ratio =
+          fit === 'cover'
+            ? Math.max((hw * 2) / img.naturalWidth, (hh * 2) / img.naturalHeight)
+            : Math.min((hw * 2) / img.naturalWidth, (hh * 2) / img.naturalHeight)
+        const drawW = img.naturalWidth * ratio * scale
+        const drawH = img.naturalHeight * ratio * scale
+        ctx.drawImage(img, -drawW / 2, -drawH / 2, drawW, drawH)
+      }
+      ctx.restore()
+      return
+    }
+
+    // fillType claims texture/image but the underlying data is missing — fall back to the stored colour.
+    if (o.fill !== 'none') {
+      ctx.fillStyle = o.fill
+      ctx.fill()
+    }
   }
 
   private drawDraft(ctx: CanvasRenderingContext2D) {
