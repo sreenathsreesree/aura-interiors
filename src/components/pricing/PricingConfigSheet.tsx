@@ -43,6 +43,14 @@ export function PricingConfigSheet({
     onClose()
   }
 
+  function handleDiscountTypeChange(type: DiscountType) {
+    // discountValue is shared between modes — carrying a fixed ₹ amount
+    // over into "percentage" (or vice versa) reads as a wildly different
+    // number, so start fresh whenever the type actually changes.
+    setDiscountType(type)
+    setDiscountValue(0)
+  }
+
   function handleSave() {
     onSave({
       markupPercent,
@@ -74,7 +82,7 @@ export function PricingConfigSheet({
             {DISCOUNT_OPTIONS.map((option) => (
               <button
                 key={option.type}
-                onClick={() => setDiscountType(option.type)}
+                onClick={() => handleDiscountTypeChange(option.type)}
                 className={cn(
                   'h-10 rounded-full border-2 px-4 text-sm font-semibold transition-colors',
                   discountType === option.type
@@ -94,6 +102,7 @@ export function PricingConfigSheet({
             value={discountValue}
             onChange={setDiscountValue}
             step={discountType === 'percentage' ? 1 : 500}
+            max={discountType === 'percentage' ? 100 : undefined}
             suffix={discountType === 'percentage' ? '%' : '₹'}
           />
         )}

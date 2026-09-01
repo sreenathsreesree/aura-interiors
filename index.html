@@ -9,6 +9,10 @@
   </head>
   <body>
     <div id="root"></div>
+    <!-- Printing a Quotation portals the document here, outside the app's
+         own scroll/flex layout, so the split-pane builder's h-dvh +
+         overflow-hidden ancestors can't clip or interrupt it. -->
+    <div id="print-root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

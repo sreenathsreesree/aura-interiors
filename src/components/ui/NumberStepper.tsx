@@ -7,6 +7,7 @@ interface NumberStepperProps {
   onChange: (value: number) => void
   step?: number
   min?: number
+  max?: number
   suffix?: string
   className?: string
 }
@@ -17,11 +18,13 @@ export function NumberStepper({
   onChange,
   step = 0.5,
   min = 0,
+  max,
   suffix,
   className,
 }: NumberStepperProps) {
   function clamp(next: number) {
-    return Math.max(min, Math.round(next * 100) / 100)
+    const floored = Math.max(min, Math.round(next * 100) / 100)
+    return max === undefined ? floored : Math.min(max, floored)
   }
 
   return (

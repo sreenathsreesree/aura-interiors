@@ -1,12 +1,19 @@
 import { Font } from '@react-pdf/renderer'
 
-import manropeRegular from '@fontsource/manrope/files/manrope-latin-400-normal.woff2'
-import manropeMedium from '@fontsource/manrope/files/manrope-latin-500-normal.woff2'
-import manropeSemibold from '@fontsource/manrope/files/manrope-latin-600-normal.woff2'
-import manropeBold from '@fontsource/manrope/files/manrope-latin-700-normal.woff2'
-import frauncesMedium from '@fontsource/fraunces/files/fraunces-latin-500-normal.woff2'
-import frauncesSemibold from '@fontsource/fraunces/files/fraunces-latin-600-normal.woff2'
-import frauncesSemiboldItalic from '@fontsource/fraunces/files/fraunces-latin-600-italic.woff2'
+// .woff, deliberately not .woff2: react-pdf's font engine (fontkit) subsets
+// the embedded font to only the glyphs actually used, and its WOFF2 decode
+// path throws ("Offset is outside the bounds of the DataView") while
+// re-encoding certain glyph tables from these fonts — .woff hits a more
+// mature/stable code path in fontkit and embeds cleanly. Confirmed by
+// generating a real PDF and inspecting it; don't switch back without
+// re-testing an actual export.
+import manropeRegular from '@fontsource/manrope/files/manrope-latin-400-normal.woff'
+import manropeMedium from '@fontsource/manrope/files/manrope-latin-500-normal.woff'
+import manropeSemibold from '@fontsource/manrope/files/manrope-latin-600-normal.woff'
+import manropeBold from '@fontsource/manrope/files/manrope-latin-700-normal.woff'
+import frauncesMedium from '@fontsource/fraunces/files/fraunces-latin-500-normal.woff'
+import frauncesSemibold from '@fontsource/fraunces/files/fraunces-latin-600-normal.woff'
+import frauncesSemiboldItalic from '@fontsource/fraunces/files/fraunces-latin-600-italic.woff'
 
 let registered = false
 

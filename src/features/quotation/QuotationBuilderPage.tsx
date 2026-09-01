@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
   ArrowLeft,
@@ -649,6 +650,8 @@ export function QuotationBuilderPage() {
           setEditingItem(undefined)
         }}
       />
+
+      {createPortal(<QuotationPreview quotation={quotation} />, document.getElementById('print-root')!)}
     </div>
   )
 }

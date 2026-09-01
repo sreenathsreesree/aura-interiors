@@ -31,7 +31,7 @@ export function QuotationPreview({ quotation }: { quotation: Quotation }) {
   const statusMeta = QUOTATION_STATUS_META[quotation.status]
 
   return (
-    <div className="quotation-print-area mx-auto w-full max-w-2xl bg-white px-6 py-8 sm:px-10 sm:py-10">
+    <div className="mx-auto w-full max-w-2xl bg-white px-6 py-8 sm:px-10 sm:py-10">
       {/* Letterhead */}
       <div className="flex flex-col gap-4 border-b-2 border-ink-900 pb-6 sm:flex-row sm:items-start sm:justify-between">
         <AuraLogo />

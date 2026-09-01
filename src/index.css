@@ -110,20 +110,20 @@
 }
 
 /* Printing a Quotation prints only the on-screen preview (the same
-   document the PDF renders from), not the surrounding builder chrome. */
+   document the PDF renders from), not the surrounding builder chrome.
+   #print-root sits outside #root in index.html — a React portal renders
+   a copy of QuotationPreview into it — so the builder's own h-dvh /
+   overflow-hidden / flex layout (needed for the on-screen split-pane
+   view) can never clip or interrupt the printed document. */
+#print-root {
+  display: none;
+}
+
 @media print {
-  body * {
-    visibility: hidden;
+  #root {
+    display: none !important;
   }
-  .quotation-print-area,
-  .quotation-print-area * {
-    visibility: visible;
-  }
-  .quotation-print-area {
-    position: absolute;
-    inset: 0;
-    width: 100%;
-    max-width: none;
-    margin: 0;
+  #print-root {
+    display: block !important;
   }
 }

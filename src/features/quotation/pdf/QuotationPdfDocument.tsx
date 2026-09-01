@@ -248,7 +248,6 @@ const styles = StyleSheet.create({
   emptyNote: {
     fontSize: 9,
     color: COLOR.ink400,
-    fontStyle: 'italic',
   },
   optionalWrap: {
     marginTop: 4,
