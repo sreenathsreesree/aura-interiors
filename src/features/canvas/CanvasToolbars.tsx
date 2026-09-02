@@ -1,15 +1,19 @@
 import { useRef, useState } from 'react'
 import {
   ArrowLeft,
+  ArrowRightToLine,
   Circle,
   Copy,
   ClipboardPaste,
+  Combine,
   CopyPlus,
   Crosshair,
+  Diff,
   Download,
   Eye,
   EyeOff,
   FlipHorizontal,
+  FlipVertical,
   Focus,
   Grid3x3,
   Group,
@@ -20,8 +24,13 @@ import {
   Magnet,
   Maximize,
   Minus,
+  Moon,
   MousePointer2,
   Palette,
+  Paintbrush,
+  PaintRoller,
+  Pen,
+  SquareStack,
   Pentagon,
   PenTool,
   Pipette,
@@ -31,6 +40,8 @@ import {
   RotateCw,
   Save,
   Scan,
+  Scissors,
+  CircleSlash2,
   Spline,
   Square,
   RectangleHorizontal,
@@ -50,6 +61,8 @@ import { ToolButton } from './ToolButton'
 import { ColorPickerPopover } from './ColorPicker'
 import { MaterialPickerPopover } from './MaterialPanel'
 import { DuplicateOffsetPopup } from './DuplicateOffsetPopup'
+import { OffsetPopup } from './OffsetPopup'
+import { UnitSelectorPopover } from './UnitSelector'
 
 interface EngineProps {
   engine: CanvasEngine
@@ -124,24 +137,35 @@ export const DRAW_TOOLS: { id: CanvasToolId; icon: React.ReactNode; label: strin
   { id: 'square', icon: <Square className="h-5 w-5" />, label: 'Square' },
   { id: 'circle', icon: <Circle className="h-5 w-5" />, label: 'Circle' },
   { id: 'arc', icon: <Spline className="h-5 w-5" />, label: 'Arc' },
+  { id: 'semicircle', icon: <Moon className="h-5 w-5" />, label: 'Semicircle' },
   { id: 'polygon', icon: <Pentagon className="h-5 w-5" />, label: 'Polygon' },
   { id: 'freeDraw', icon: <PenTool className="h-5 w-5" />, label: 'Free Draw' },
+  { id: 'pen', icon: <Pen className="h-5 w-5" />, label: 'Pen' },
   { id: 'text', icon: <Type className="h-5 w-5" />, label: 'Text' },
   { id: 'dimension', icon: <Ruler className="h-5 w-5" />, label: 'Dimension' },
   { id: 'measure', icon: <Crosshair className="h-5 w-5" />, label: 'Measure' },
+  { id: 'trim', icon: <Scissors className="h-5 w-5" />, label: 'Trim' },
+  { id: 'extend', icon: <ArrowRightToLine className="h-5 w-5" />, label: 'Extend' },
 ]
+
+export const BOOLEAN_TYPES = new Set(['rectangle', 'square', 'circle', 'polygon', 'path'])
+export const OFFSET_TYPES = new Set(['line', 'rectangle', 'square', 'circle', 'polygon', 'path'])
 
 // ------------------------------------------------------------- Left Toolbar
 export function CanvasLeftToolbar({ engine, snapshot }: EngineProps) {
   const [fillPickerOpen, setFillPickerOpen] = useState(false)
   const [materialPickerOpen, setMaterialPickerOpen] = useState(false)
   const [offsetPopoverOpen, setOffsetPopoverOpen] = useState(false)
+  const [distanceOffsetOpen, setDistanceOffsetOpen] = useState(false)
   const fillAnchorRef = useRef<HTMLDivElement>(null)
   const materialAnchorRef = useRef<HTMLDivElement>(null)
   const offsetAnchorRef = useRef<HTMLDivElement>(null)
+  const distanceOffsetAnchorRef = useRef<HTMLDivElement>(null)
   const hasSelection = snapshot.selection.length > 0
   const selectedLocked = snapshot.selectedObjects.some((o) => o.locked)
   const selectedHidden = snapshot.selectedObjects.some((o) => !o.visible)
+  const booleanReady = snapshot.selectedObjects.length === 2 && snapshot.selectedObjects.every((o) => BOOLEAN_TYPES.has(o.type))
+  const offsetReady = snapshot.selectedObjects.length > 0 && snapshot.selectedObjects.every((o) => OFFSET_TYPES.has(o.type))
 
   return (
     <div className="flex h-full w-16 shrink-0 flex-col items-center gap-1 overflow-y-auto border-r border-ink-800 bg-ink-900 py-3 no-scrollbar">
@@ -229,13 +253,15 @@ export function CanvasLeftToolbar({ engine, snapshot }: EngineProps) {
         {offsetPopoverOpen && (
           <DuplicateOffsetPopup
             anchorRef={offsetAnchorRef}
+            unit={snapshot.settings.unit}
             onDuplicate={(dx, dy, count) => engine.duplicateWithOffset(dx, dy, count)}
             onClose={() => setOffsetPopoverOpen(false)}
           />
         )}
       </div>
       <ToolButton icon={<RotateCw className="h-5 w-5" />} label="Rotate 90°" disabled={!hasSelection} onClick={() => engine.rotateSelectedBy(90)} />
-      <ToolButton icon={<FlipHorizontal className="h-5 w-5" />} label="Mirror" disabled={!hasSelection} onClick={() => engine.mirrorSelected('horizontal')} />
+      <ToolButton icon={<FlipHorizontal className="h-5 w-5" />} label="Flip Horizontal" disabled={!hasSelection} onClick={() => engine.flipSelected('horizontal')} />
+      <ToolButton icon={<FlipVertical className="h-5 w-5" />} label="Flip Vertical" disabled={!hasSelection} onClick={() => engine.flipSelected('vertical')} />
       <ToolButton
         icon={selectedLocked ? <Lock className="h-5 w-5" /> : <LockOpen className="h-5 w-5" />}
         label={selectedLocked ? 'Unlock' : 'Lock'}
@@ -250,12 +276,36 @@ export function CanvasLeftToolbar({ engine, snapshot }: EngineProps) {
       />
       <ToolButton icon={<Group className="h-5 w-5" />} label="Group" disabled={snapshot.selection.length < 2} onClick={() => engine.groupSelected()} />
       <ToolButton icon={<Ungroup className="h-5 w-5" />} label="Ungroup" disabled={!hasSelection} onClick={() => engine.ungroupSelected()} />
+
+      <div className="my-1.5 h-px w-8 shrink-0 bg-white/10" />
+
+      <ToolButton icon={<Paintbrush className="h-5 w-5" />} label="Copy Style" disabled={snapshot.selection.length === 0} onClick={() => engine.copyStyle()} />
+      <ToolButton icon={<PaintRoller className="h-5 w-5" />} label="Paste Style" disabled={!hasSelection || !snapshot.hasCopiedStyle} onClick={() => engine.pasteStyle()} />
+      <div ref={distanceOffsetAnchorRef} className="relative">
+        <ToolButton
+          icon={<SquareStack className="h-5 w-5" />}
+          label="Offset"
+          disabled={!offsetReady}
+          active={distanceOffsetOpen}
+          onClick={() => setDistanceOffsetOpen((v) => !v)}
+        />
+        {distanceOffsetOpen && (
+          <OffsetPopup anchorRef={distanceOffsetAnchorRef} unit={snapshot.settings.unit} onOffset={(mm) => engine.offsetSelected(mm)} onClose={() => setDistanceOffsetOpen(false)} />
+        )}
+      </div>
+      <ToolButton icon={<Combine className="h-5 w-5" />} label="Union" disabled={!booleanReady} onClick={() => engine.booleanSelected('union')} />
+      <ToolButton icon={<CircleSlash2 className="h-5 w-5" />} label="Subtract" disabled={!booleanReady} onClick={() => engine.booleanSelected('subtract')} />
+      <ToolButton icon={<Diff className="h-5 w-5" />} label="Intersect" disabled={!booleanReady} onClick={() => engine.booleanSelected('intersect')} />
+      <ToolButton icon={<Diff className="h-5 w-5 rotate-180" />} label="Exclude" disabled={!booleanReady} onClick={() => engine.booleanSelected('exclude')} />
     </div>
   )
 }
 
 // ------------------------------------------------------------ Bottom Bar
 export function CanvasBottomBar({ engine, snapshot }: EngineProps) {
+  const [unitPickerOpen, setUnitPickerOpen] = useState(false)
+  const unitAnchorRef = useRef<HTMLButtonElement>(null)
+
   return (
     <div className="flex h-13 shrink-0 items-center gap-1.5 overflow-x-auto border-t border-ink-800 bg-ink-950 px-3 no-scrollbar sm:gap-2">
       <ToolButton icon={<ZoomOut className="h-4 w-4" />} label="Zoom Out" onClick={() => engine.zoomOut()} />
@@ -276,12 +326,20 @@ export function CanvasBottomBar({ engine, snapshot }: EngineProps) {
 
       <div className="mx-1 h-6 w-px shrink-0 bg-white/10" />
 
-      <button
-        onClick={() => engine.cycleUnit()}
-        className="h-9 shrink-0 rounded-full border border-white/15 px-3 text-xs font-semibold text-sand-200 hover:bg-white/10"
-      >
-        Unit: {snapshot.settings.unit}
-      </button>
+      <div className="relative">
+        <button
+          ref={unitAnchorRef}
+          onClick={() => setUnitPickerOpen((v) => !v)}
+          aria-haspopup="true"
+          aria-expanded={unitPickerOpen}
+          className="h-9 shrink-0 rounded-full border border-white/15 px-3 text-xs font-semibold text-sand-200 hover:bg-white/10"
+        >
+          Unit: {snapshot.settings.unit}
+        </button>
+        {unitPickerOpen && (
+          <UnitSelectorPopover anchorRef={unitAnchorRef} activeUnit={snapshot.settings.unit} onSelect={(u) => engine.setUnit(u)} onClose={() => setUnitPickerOpen(false)} side="left" />
+        )}
+      </div>
       <span className="hidden shrink-0 text-xs text-sand-400 sm:inline">Grid {formatDimension(snapshot.settings.gridSize, snapshot.settings.unit)}</span>
     </div>
   )

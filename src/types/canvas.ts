@@ -12,6 +12,9 @@
 // only some types use (points, text, dimensionValue, texture placeholders)
 // are optional.
 
+import type { CanvasUnit } from '@/lib/units'
+export type { CanvasUnit } from '@/lib/units'
+
 export type CanvasToolId =
   | 'select'
   | 'pan'
@@ -20,14 +23,18 @@ export type CanvasToolId =
   | 'circle'
   | 'line'
   | 'arc'
+  | 'semicircle'
   | 'polygon'
   | 'freeDraw'
+  | 'pen'
   | 'text'
   | 'dimension'
   | 'fill'
   | 'eyedropper'
   | 'measure'
   | 'lasso'
+  | 'trim'
+  | 'extend'
 
 /** Object types buildable in this phase. */
 export type DrawableObjectType =
@@ -40,6 +47,7 @@ export type DrawableObjectType =
   | 'freeDraw'
   | 'text'
   | 'dimension'
+  | 'path'
 
 /**
  * Reserved for later Canvas phases (V2 materials, V3 interior components).
@@ -69,6 +77,18 @@ export type FillFit = 'tile' | 'cover' | 'contain'
 export interface Point {
   x: number
   y: number
+}
+
+/** AURA CANVAS V3C — one anchor of a Pen tool path, in the object's local space. */
+export interface PathVertex {
+  x: number
+  y: number
+  /** Incoming Bézier control point (local space). Absent = a straight corner on the incoming side. */
+  handleIn?: Point
+  /** Outgoing Bézier control point (local space). Absent = a straight corner on the outgoing side. */
+  handleOut?: Point
+  /** Editing convenience: dragging one handle mirrors the other through the anchor. Purely a UX flag — rendering only ever looks at handleIn/handleOut. */
+  smooth?: boolean
 }
 
 export interface CanvasObject {
@@ -104,15 +124,43 @@ export interface CanvasObject {
   points?: Point[]
   /** Arc only: signed bulge (tan(includedAngle/4)) between points[0] and points[1]. */
   arcBulge?: number
-  /** Polygon only: true once the user has closed the shape. */
+  /** Polygon/arc only: true once the user has closed the shape (arc: also fills the pie/chord area, e.g. a Semicircle). */
   closed?: boolean
-  /** Rectangle/square only (AURA CANVAS V3A): corner radius in mm, clamped to half the smaller side when rendered. */
+  /** Rectangle/square only (AURA CANVAS V3A): uniform corner radius in mm, clamped to half the smaller side when rendered. Superseded by `cornerRadii` when present (V3C). */
   cornerRadius?: number
+  /** Rectangle/square only (AURA CANVAS V3C): independent per-corner radius in mm. Falls back to `cornerRadius` (then 0) for any missing corner, so older documents keep rendering unchanged. */
+  cornerRadii?: { topLeft?: number; topRight?: number; bottomRight?: number; bottomLeft?: number }
+
+  /**
+   * Pen tool path (AURA CANVAS V3C, type 'path'). Cubic-bezier vertices in
+   * local space (relative to x/y, like `points`) — a vertex with no handles
+   * renders as a straight corner; `bezierCurveTo` degrades to a straight
+   * line automatically when a control point equals its anchor, so corner
+   * and curve segments share one code path.
+   */
+  pathVertices?: PathVertex[]
+  pathClosed?: boolean
+  /**
+   * Boolean-operation result (AURA CANVAS V3C, type 'path'). One or more
+   * straight-edged local-space loops, filled with the even-odd rule so a
+   * nested loop automatically renders as a hole (e.g. Subtract). Mutually
+   * exclusive with `pathVertices` on the same object — a boolean result is
+   * always straight-edged, never re-curved.
+   */
+  pathSubpaths?: Point[][]
 
   // Text
   text?: string
   fontSize?: number
   textAlign?: 'left' | 'center' | 'right'
+  /** V3C: bold weight for the text object's own rendering (not a global typography system). */
+  fontWeight?: 'normal' | 'bold'
+  /** V3C: manual wrap width in mm — when set, text greedily word-wraps to fit instead of rendering as one line. */
+  textBoxWidth?: number
+  /** V3C: optional solid background panel behind the text, drawn before the glyphs. 'none' (default) means no background. */
+  textBackground?: string
+  /** V3C: optional leader/callout line from the text box to a world-space point — lightweight room for the later annotation system, not a full callout editor. */
+  calloutTarget?: Point
 
   // Dimension — structured data, not permanently drawn text.
   dimensionValue?: number // mm, real-world length
@@ -139,7 +187,6 @@ export interface CanvasLayer {
 }
 
 export type CanvasViewMode = 'plan' | 'elevation'
-export type CanvasUnit = 'mm' | 'cm' | 'm'
 
 export interface CanvasSettings {
   gridSize: number // mm
@@ -177,10 +224,36 @@ export const DEFAULT_LAYERS: Omit<CanvasLayer, 'id'>[] = [
   { name: 'Dimensions', visible: true, locked: false, order: 5 },
 ]
 
-export const CLOSED_SHAPE_TYPES: CanvasObjectType[] = ['rectangle', 'square', 'circle', 'polygon']
+export const CLOSED_SHAPE_TYPES: CanvasObjectType[] = ['rectangle', 'square', 'circle', 'polygon', 'path']
+
+/** Shapes a Boolean operation or Offset can meaningfully act on. */
+export const BOOLEAN_COMPATIBLE_TYPES: CanvasObjectType[] = ['rectangle', 'square', 'circle', 'polygon', 'path']
 
 /** AURA CANVAS V3A — the double-click/double-tap precision-creation popup's typed input, per tool. */
 export type PreciseCreateSpec =
   | { type: 'rectangle'; width: number; height: number; cornerRadius: number; fill: string; stroke: string }
   | { type: 'circle'; diameter: number; fill: string; stroke: string }
   | { type: 'line'; length: number; angleDeg: number; stroke: string }
+  | { type: 'semicircle'; diameter: number; fill: string; stroke: string }
+
+/**
+ * AURA CANVAS V3C — Copy Style / Paste Style clipboard. A snapshot of an
+ * object's purely-visual properties (never geometry), applied to a
+ * different object's existing shape rather than duplicating it.
+ */
+export interface CopiedStyle {
+  fillType: FillType
+  fill: string
+  opacity: number
+  strokeEnabled: boolean
+  stroke: string
+  strokeWidth: number
+  materialId?: string
+  imageData?: string
+  fillFit?: FillFit
+  textureScale?: number
+  textureOffset?: Point
+  textureRotation?: number
+  cornerRadius?: number
+  cornerRadii?: CanvasObject['cornerRadii']
+}

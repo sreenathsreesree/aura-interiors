@@ -46,9 +46,18 @@ export function AuraCanvasPage() {
         e.preventDefault()
         engine.deleteSelected()
       } else if (e.key === 'Escape') {
-        engine.cancelDraft()
-        engine.clearSelection()
-        engine.clearMeasurement()
+        if (snapshot.editingPathId) {
+          engine.exitPathEdit()
+        } else if (snapshot.penDraftVertexCount > 0) {
+          engine.cancelPen()
+        } else {
+          engine.cancelDraft()
+          engine.clearSelection()
+          engine.clearMeasurement()
+        }
+      } else if (e.key === 'Enter' && snapshot.penDraftVertexCount > 0) {
+        e.preventDefault()
+        engine.finishPen(false)
       } else if (meta && e.key.toLowerCase() === 'z' && e.shiftKey) {
         e.preventDefault()
         engine.redo()
@@ -78,7 +87,7 @@ export function AuraCanvasPage() {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [engine, snapshot.editingTextId])
+  }, [engine, snapshot.editingTextId, snapshot.editingPathId, snapshot.penDraftVertexCount])
 
   if (!project || !room) {
     return (

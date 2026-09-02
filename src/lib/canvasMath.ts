@@ -160,6 +160,123 @@ export function objectSnapPoints(obj: Pick<CanvasObject, 'x' | 'y' | 'width' | '
   return { xs: [minX, maxX, center.x], ys: [minY, maxY, center.y] }
 }
 
+/** Standard even-odd point-in-polygon test across MULTIPLE loops at once — a point inside an odd number of nested loops is "inside", which is exactly what the even-odd fill rule renders, so this doubles as the hit-test for a Boolean-op result with holes. */
+export function pointInMultiPolygon(pt: Point, subpaths: Point[][]): boolean {
+  let inside = false
+  for (const points of subpaths) {
+    for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
+      const xi = points[i].x
+      const yi = points[i].y
+      const xj = points[j].x
+      const yj = points[j].y
+      const intersects = yi > pt.y !== yj > pt.y && pt.x < ((xj - xi) * (pt.y - yi)) / (yj - yi) + xi
+      if (intersects) inside = !inside
+    }
+  }
+  return inside
+}
+
+/** Intersection of two finite segments, or null if they don't cross within both segments. */
+export function segmentIntersection(a1: Point, a2: Point, b1: Point, b2: Point): Point | null {
+  const d1x = a2.x - a1.x
+  const d1y = a2.y - a1.y
+  const d2x = b2.x - b1.x
+  const d2y = b2.y - b1.y
+  const denom = d1x * d2y - d1y * d2x
+  if (Math.abs(denom) < 1e-9) return null // parallel/collinear
+  const t = ((b1.x - a1.x) * d2y - (b1.y - a1.y) * d2x) / denom
+  const u = ((b1.x - a1.x) * d1y - (b1.y - a1.y) * d1x) / denom
+  if (t < -1e-6 || t > 1 + 1e-6 || u < -1e-6 || u > 1 + 1e-6) return null
+  return { x: a1.x + t * d1x, y: a1.y + t * d1y }
+}
+
+/**
+ * Casts a ray from `origin` toward `direction` (a unit-ish vector — only its
+ * sign/angle matters) and finds the nearest forward crossing with segment
+ * b1-b2, or null. Used by Extend: the line's own direction is the ray, the
+ * "target" line/edge is the segment.
+ */
+export function rayIntersectsSegment(origin: Point, direction: Point, b1: Point, b2: Point): Point | null {
+  const d2x = b2.x - b1.x
+  const d2y = b2.y - b1.y
+  const denom = direction.x * d2y - direction.y * d2x
+  if (Math.abs(denom) < 1e-9) return null
+  const t = ((b1.x - origin.x) * d2y - (b1.y - origin.y) * d2x) / denom
+  const u = ((b1.x - origin.x) * direction.y - (b1.y - origin.y) * direction.x) / denom
+  if (t < 1e-6 || u < -1e-6 || u > 1 + 1e-6) return null // t<=0 means "behind" the ray's start
+  return { x: origin.x + t * direction.x, y: origin.y + t * direction.y }
+}
+
+/** Evaluates a cubic Bézier at t∈[0,1]. */
+export function cubicBezierPoint(p0: Point, c1: Point, c2: Point, p1: Point, t: number): Point {
+  const mt = 1 - t
+  const a = mt * mt * mt
+  const b = 3 * mt * mt * t
+  const c = 3 * mt * t * t
+  const d = t * t * t
+  return {
+    x: a * p0.x + b * c1.x + c * c2.x + d * p1.x,
+    y: a * p0.y + b * c1.y + c * c2.y + d * p1.y,
+  }
+}
+
+/** Flattens one cubic Bézier segment into a polyline (fixed step count — plenty smooth for on-screen hit-testing and rendering fallbacks at Canvas's usual zoom range). */
+export function flattenCubicBezier(p0: Point, c1: Point, c2: Point, p1: Point, steps = 16): Point[] {
+  const pts: Point[] = []
+  for (let i = 0; i <= steps; i++) pts.push(cubicBezierPoint(p0, c1, c2, p1, i / steps))
+  return pts
+}
+
+/**
+ * Simple polygon offset: translate each edge outward (or inward, for a
+ * negative distance) along its own normal, then re-intersect each pair of
+ * adjacent translated edges to find the new vertex. Correct for convex
+ * polygons and most everyday mildly-concave ones; a genuinely
+ * self-intersecting concave offset can produce a bowtie — deliberately not
+ * handled, per "don't build a complex CAD offset engine."
+ */
+export function offsetPolygon(points: Point[], distance: number): Point[] | null {
+  const n = points.length
+  if (n < 3) return null
+  // Signed area to know which normal direction is "outward" regardless of winding.
+  let area = 0
+  for (let i = 0; i < n; i++) {
+    const a = points[i]
+    const b = points[(i + 1) % n]
+    area += a.x * b.y - b.x * a.y
+  }
+  const clockwise = area < 0
+  const offsetLines: { a: Point; b: Point }[] = []
+  for (let i = 0; i < n; i++) {
+    const a = points[i]
+    const b = points[(i + 1) % n]
+    const dx = b.x - a.x
+    const dy = b.y - a.y
+    const len = Math.hypot(dx, dy) || 1
+    // Outward normal for a CCW polygon is (dy,-dx); flip for CW.
+    const nx = (clockwise ? -dy : dy) / len
+    const ny = (clockwise ? dx : -dx) / len
+    offsetLines.push({ a: { x: a.x + nx * distance, y: a.y + ny * distance }, b: { x: b.x + nx * distance, y: b.y + ny * distance } })
+  }
+  const result: Point[] = []
+  for (let i = 0; i < n; i++) {
+    const prev = offsetLines[(i - 1 + n) % n]
+    const cur = offsetLines[i]
+    // Intersect the (infinite) lines through prev and cur — segmentIntersection
+    // is segment-bounded, so extend generously along each line's own direction first.
+    const prevDir = { x: prev.b.x - prev.a.x, y: prev.b.y - prev.a.y }
+    const curDir = { x: cur.b.x - cur.a.x, y: cur.b.y - cur.a.y }
+    const denom = prevDir.x * curDir.y - prevDir.y * curDir.x
+    if (Math.abs(denom) < 1e-9) {
+      result.push(cur.a) // parallel edges — just use the translated point, close enough
+      continue
+    }
+    const t = ((cur.a.x - prev.a.x) * curDir.y - (cur.a.y - prev.a.y) * curDir.x) / denom
+    result.push({ x: prev.a.x + t * prevDir.x, y: prev.a.y + t * prevDir.y })
+  }
+  return result
+}
+
 /**
  * Converts a 2-point + bulge arc (DXF-style: bulge = tan(includedAngle/4))
  * into an SVG/Canvas-friendly {center, radius, startAngle, endAngle, ccw}.

@@ -10,15 +10,22 @@ import {
   AlignVerticalDistributeCenter,
   ArrowDown,
   ArrowUp,
+  Bold,
+  Check,
   ChevronDown,
   ChevronUp,
   ChevronsDown,
   ChevronsUp,
   Eye,
   EyeOff,
+  FlipVertical2,
   Lock,
   LockOpen,
+  MapPin,
+  MapPinOff,
   Plus,
+  Trash2,
+  X,
 } from 'lucide-react'
 import { cn } from '@/lib/cn'
 import { NumberStepper } from '@/components/ui'
@@ -26,8 +33,10 @@ import type { CanvasEngine, CanvasEngineSnapshot } from '@/lib/canvasEngine'
 import { getMaterialById } from '@/data/materials'
 import { getMaterialThumbnailDataUrl } from '@/lib/materialPatterns'
 import type { CanvasObject } from '@/types/canvas'
+import { formatLength } from '@/lib/units'
 import { AnchoredPopover } from './AnchoredPopover'
 import { ColorPickerContent } from './ColorPicker'
+import { LengthField } from './LengthField'
 import { MaterialPickerContent } from './MaterialPanel'
 
 interface Props {
@@ -44,6 +53,7 @@ const TYPE_LABEL: Record<string, string> = {
   arc: 'Arc',
   polygon: 'Polygon',
   freeDraw: 'Free Draw',
+  path: 'Path',
   text: 'Text',
   dimension: 'Dimension',
 }
@@ -74,10 +84,10 @@ export function PropertyPanel({ engine, snapshot, className }: Props) {
           <Section title={selected.length > 1 ? `${selected.length} objects selected` : TYPE_LABEL[first.type] ?? first.type}>
             {single && (
               <div className="grid grid-cols-2 gap-2.5">
-                <NumberStepper label="X (mm)" value={Math.round(single.x)} onChange={(v) => engine.updateSelectedProps({ x: v })} step={10} />
-                <NumberStepper label="Y (mm)" value={Math.round(single.y)} onChange={(v) => engine.updateSelectedProps({ y: v })} step={10} />
-                <NumberStepper label="Width (mm)" value={Math.round(single.width)} onChange={(v) => engine.updateSelectedProps({ width: Math.max(10, v) })} step={10} />
-                <NumberStepper label="Height (mm)" value={Math.round(single.height)} onChange={(v) => engine.updateSelectedProps({ height: Math.max(10, v) })} step={10} />
+                <LengthField label="X" unit={snapshot.settings.unit} valueMm={single.x} onChangeMm={(v) => engine.updateSelectedProps({ x: v })} />
+                <LengthField label="Y" unit={snapshot.settings.unit} valueMm={single.y} onChangeMm={(v) => engine.updateSelectedProps({ y: v })} />
+                <LengthField label="Width" unit={snapshot.settings.unit} valueMm={single.width} onChangeMm={(v) => engine.updateSelectedProps({ width: Math.max(10, v) })} min={10} />
+                <LengthField label="Height" unit={snapshot.settings.unit} valueMm={single.height} onChangeMm={(v) => engine.updateSelectedProps({ height: Math.max(10, v) })} min={10} />
                 <NumberStepper
                   label="Rotation °"
                   value={Math.round(single.rotation)}
@@ -86,55 +96,76 @@ export function PropertyPanel({ engine, snapshot, className }: Props) {
                   className="col-span-2"
                 />
                 {(single.type === 'rectangle' || single.type === 'square') && (
-                  <NumberStepper
-                    label="Corner Radius (mm)"
-                    value={Math.round(single.cornerRadius ?? 0)}
-                    onChange={(v) => engine.updateSelectedProps({ cornerRadius: Math.max(0, v) })}
-                    step={5}
-                    className="col-span-2"
-                  />
+                  <div className="col-span-2">
+                    <CornerRadiusControls engine={engine} object={single} unit={snapshot.settings.unit} />
+                  </div>
                 )}
                 {single.type === 'arc' && (
-                  <NumberStepper
-                    label="Curve"
-                    value={single.arcBulge ?? 0.5}
-                    onChange={(v) => engine.updateSelectedProps({ arcBulge: v })}
-                    step={0.1}
-                    className="col-span-2"
-                  />
+                  <>
+                    <NumberStepper
+                      label="Curve"
+                      value={single.arcBulge ?? 0.5}
+                      onChange={(v) => engine.updateSelectedProps({ arcBulge: v })}
+                      step={0.1}
+                      className="col-span-2"
+                    />
+                    <button
+                      onClick={() => engine.updateSelectedProps({ arcBulge: -(single.arcBulge ?? 0.5) })}
+                      className="col-span-2 flex h-9 items-center justify-center gap-1.5 rounded-md border-2 border-ink-100 text-xs font-semibold text-ink-600 hover:border-ink-400"
+                    >
+                      <FlipVertical2 className="h-3.5 w-3.5" />
+                      Flip Orientation
+                    </button>
+                  </>
                 )}
                 {single.type === 'text' && (
-                  <NumberStepper
-                    label="Font Size"
-                    value={single.fontSize ?? 32}
-                    onChange={(v) => engine.updateSelectedProps({ fontSize: Math.max(10, v) })}
-                    step={2}
-                    className="col-span-2"
-                  />
+                  <>
+                    <NumberStepper
+                      label="Font Size"
+                      value={single.fontSize ?? 32}
+                      onChange={(v) => engine.updateSelectedProps({ fontSize: Math.max(10, v) })}
+                      step={2}
+                    />
+                    <button
+                      onClick={() => engine.updateSelectedProps({ fontWeight: single.fontWeight === 'bold' ? 'normal' : 'bold' })}
+                      className={cn(
+                        'flex h-14 items-center justify-center gap-1.5 self-end rounded-[--radius-md] border-2 text-sm font-semibold',
+                        single.fontWeight === 'bold' ? 'border-ink-900 bg-ink-900 text-sand-50' : 'border-ink-100 text-ink-600',
+                      )}
+                      aria-pressed={single.fontWeight === 'bold'}
+                    >
+                      <Bold className="h-4 w-4" />
+                      Bold
+                    </button>
+                  </>
                 )}
                 {single.type === 'dimension' && (
                   <div className="col-span-2 rounded-md bg-sand-50 px-3 py-2.5 text-sm font-semibold text-ink-700">
-                    Length: {Math.round(single.dimensionValue ?? 0)} mm
+                    Length: {formatLength(single.dimensionValue ?? 0, snapshot.settings.unit)}
                   </div>
                 )}
               </div>
             )}
             {single?.type === 'text' && (
-              <div className="mt-2.5 flex gap-1.5">
-                {(['left', 'center', 'right'] as const).map((align) => (
-                  <button
-                    key={align}
-                    onClick={() => engine.updateSelectedProps({ textAlign: align })}
-                    className={cn(
-                      'h-9 flex-1 rounded-md border-2 text-xs font-semibold capitalize',
-                      single.textAlign === align ? 'border-ink-900 bg-ink-900 text-sand-50' : 'border-ink-100 text-ink-600',
-                    )}
-                  >
-                    {align}
-                  </button>
-                ))}
-              </div>
+              <>
+                <div className="mt-2.5 flex gap-1.5">
+                  {(['left', 'center', 'right'] as const).map((align) => (
+                    <button
+                      key={align}
+                      onClick={() => engine.updateSelectedProps({ textAlign: align })}
+                      className={cn(
+                        'h-9 flex-1 rounded-md border-2 text-xs font-semibold capitalize',
+                        single.textAlign === align ? 'border-ink-900 bg-ink-900 text-sand-50' : 'border-ink-100 text-ink-600',
+                      )}
+                    >
+                      {align}
+                    </button>
+                  ))}
+                </div>
+                <TextExtraControls engine={engine} object={single} unit={snapshot.settings.unit} />
+              </>
             )}
+            {snapshot.editingPathId && <PathEditControls engine={engine} snapshot={snapshot} />}
 
             {selected.length >= 2 && (
               <div className="flex flex-col gap-2.5">
@@ -191,7 +222,7 @@ export function PropertyPanel({ engine, snapshot, className }: Props) {
                   </div>
                 </div>
               ) : (
-                <MaterialFillControls engine={engine} object={first} />
+                <MaterialFillControls engine={engine} object={first} unit={snapshot.settings.unit} />
               )}
 
               <div className="flex items-center justify-between">
@@ -230,12 +261,7 @@ export function PropertyPanel({ engine, snapshot, className }: Props) {
                 </div>
               </div>
 
-              <NumberStepper
-                label="Stroke Width"
-                value={first.strokeWidth}
-                onChange={(v) => engine.updateSelectedProps({ strokeWidth: Math.max(0.5, v) })}
-                step={0.5}
-              />
+              <LengthField label="Stroke Width" unit={snapshot.settings.unit} valueMm={first.strokeWidth} onChangeMm={(v) => engine.updateSelectedProps({ strokeWidth: Math.max(0.5, v) })} min={0.5} stepMm={2} />
 
               <div>
                 <div className="mb-1 flex items-center justify-between text-xs font-medium text-ink-500">
@@ -295,7 +321,7 @@ export function PropertyPanel({ engine, snapshot, className }: Props) {
 }
 
 /** Material/Type/Scale/Rotation/Offset/Opacity controls for a texture- or image-filled object. Opacity itself is handled by the shared slider further down in Appearance. */
-function MaterialFillControls({ engine, object }: { engine: CanvasEngine; object: CanvasObject }) {
+function MaterialFillControls({ engine, object, unit }: { engine: CanvasEngine; object: CanvasObject; unit: CanvasEngineSnapshot['settings']['unit'] }) {
   const [pickerOpen, setPickerOpen] = useState(false)
   const triggerRef = useRef<HTMLButtonElement>(null)
   const isImage = object.fillType === 'image'
@@ -364,8 +390,8 @@ function MaterialFillControls({ engine, object }: { engine: CanvasEngine; object
           onChange={(v) => engine.updateSelectedProps({ textureRotation: ((v % 360) + 360) % 360 })}
           step={15}
         />
-        <NumberStepper label="Offset X" value={Math.round(offset.x)} onChange={(v) => engine.updateSelectedProps({ textureOffset: { x: v, y: offset.y } })} step={5} />
-        <NumberStepper label="Offset Y" value={Math.round(offset.y)} onChange={(v) => engine.updateSelectedProps({ textureOffset: { x: offset.x, y: v } })} step={5} />
+        <LengthField label="Offset X" unit={unit} valueMm={offset.x} onChangeMm={(v) => engine.updateSelectedProps({ textureOffset: { x: v, y: offset.y } })} />
+        <LengthField label="Offset Y" unit={unit} valueMm={offset.y} onChangeMm={(v) => engine.updateSelectedProps({ textureOffset: { x: offset.x, y: v } })} />
       </div>
 
       <button
@@ -378,13 +404,160 @@ function MaterialFillControls({ engine, object }: { engine: CanvasEngine; object
   )
 }
 
-function PanelIconButton({ icon, label, onClick }: { icon: React.ReactNode; label: string; onClick: () => void }) {
+const CORNER_LABELS = [
+  { key: 'topLeft' as const, label: 'Top Left' },
+  { key: 'topRight' as const, label: 'Top Right' },
+  { key: 'bottomRight' as const, label: 'Bottom Right' },
+  { key: 'bottomLeft' as const, label: 'Bottom Left' },
+]
+
+/** V3C — uniform corner radius by default, switchable to independent per-corner values. */
+function CornerRadiusControls({ engine, object, unit }: { engine: CanvasEngine; object: CanvasObject; unit: CanvasEngineSnapshot['settings']['unit'] }) {
+  const [perCorner, setPerCorner] = useState(Boolean(object.cornerRadii))
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-medium text-ink-500">Corner Radius</span>
+        <div className="flex gap-1">
+          <button
+            onClick={() => setPerCorner(false)}
+            className={cn('rounded px-2 py-1 text-[11px] font-semibold', !perCorner ? 'bg-ink-900 text-sand-50' : 'text-ink-500 hover:bg-sand-50')}
+          >
+            All corners
+          </button>
+          <button
+            onClick={() => setPerCorner(true)}
+            className={cn('rounded px-2 py-1 text-[11px] font-semibold', perCorner ? 'bg-ink-900 text-sand-50' : 'text-ink-500 hover:bg-sand-50')}
+          >
+            Individual
+          </button>
+        </div>
+      </div>
+      {!perCorner ? (
+        <LengthField label="Radius" unit={unit} valueMm={object.cornerRadius ?? 0} onChangeMm={(v) => engine.setUniformCornerRadius(v)} min={0} stepMm={5} />
+      ) : (
+        <div className="grid grid-cols-2 gap-2.5">
+          {CORNER_LABELS.map(({ key, label }) => (
+            <LengthField
+              key={key}
+              label={label}
+              unit={unit}
+              valueMm={object.cornerRadii?.[key] ?? object.cornerRadius ?? 0}
+              onChangeMm={(v) => engine.setCornerRadius(key, v)}
+              min={0}
+              stepMm={5}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** V3C — text box width (word-wrap), background panel, and leader/callout controls. */
+function TextExtraControls({ engine, object, unit }: { engine: CanvasEngine; object: CanvasObject; unit: CanvasEngineSnapshot['settings']['unit'] }) {
+  const [bgSwatchOpen, setBgSwatchOpen] = useState(false)
+  const bgSwatchRef = useRef<HTMLButtonElement>(null)
+  const hasBackground = Boolean(object.textBackground && object.textBackground !== 'none')
+
+  return (
+    <div className="mt-2.5 flex flex-col gap-2.5">
+      <div className="flex items-center gap-2">
+        <LengthField
+          label="Text Box Width"
+          unit={unit}
+          valueMm={object.textBoxWidth ?? object.width}
+          onChangeMm={(v) => engine.updateSelectedProps({ textBoxWidth: Math.max(20, v) })}
+          min={20}
+          className="flex-1"
+        />
+        {object.textBoxWidth !== undefined && (
+          <button
+            onClick={() => engine.updateSelectedProps({ textBoxWidth: undefined })}
+            aria-label="Remove text box width (back to single line)"
+            className="mt-6 flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-ink-200 text-ink-500 hover:border-ink-400"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        )}
+      </div>
+
+      <div className="flex items-center justify-between">
+        <span className="text-sm font-medium text-ink-600">Background</span>
+        <div className="flex items-center gap-2">
+          {hasBackground && (
+            <button onClick={() => engine.updateSelectedProps({ textBackground: 'none' })} className="text-xs font-semibold text-ink-400 hover:text-ink-700">
+              None
+            </button>
+          )}
+          <div className="relative">
+            <button
+              ref={bgSwatchRef}
+              onClick={() => setBgSwatchOpen((v) => !v)}
+              className="h-8 w-8 rounded-full border-2 border-white shadow-[0_0_0_1px_rgba(0,0,0,0.15)]"
+              style={{ background: hasBackground ? object.textBackground : 'repeating-conic-gradient(#ccc 0% 25%, transparent 0% 50%) 50% / 8px 8px' }}
+              aria-label="Edit text background colour"
+            />
+            {bgSwatchOpen && (
+              <AnchoredPopover anchorRef={bgSwatchRef} side="left" onClose={() => setBgSwatchOpen(false)}>
+                <ColorPickerContent
+                  color={hasBackground ? object.textBackground! : '#ffffff'}
+                  opacity={1}
+                  recentColors={[]}
+                  onChangeColor={(c) => engine.updateSelectedProps({ textBackground: c })}
+                  onChangeOpacity={() => {}}
+                />
+              </AnchoredPopover>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="flex items-center justify-between">
+        <span className="text-sm font-medium text-ink-600">Leader / Callout</span>
+        {object.calloutTarget ? (
+          <button onClick={() => engine.removeLeader(object.id)} className="flex h-9 items-center gap-1.5 rounded-md border-2 border-ink-100 px-3 text-xs font-semibold text-ink-600 hover:border-ink-400">
+            <MapPinOff className="h-3.5 w-3.5" />
+            Remove Leader
+          </button>
+        ) : (
+          <button onClick={() => engine.startAddLeader(object.id)} className="flex h-9 items-center gap-1.5 rounded-md border-2 border-ink-100 px-3 text-xs font-semibold text-ink-600 hover:border-ink-400">
+            <MapPin className="h-3.5 w-3.5" />
+            Add Leader
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/** V3C Pen tool — Corner/Smooth/Delete/Close/Done controls for the path currently in vertex-edit mode. */
+function PathEditControls({ engine, snapshot }: { engine: CanvasEngine; snapshot: CanvasEngineSnapshot }) {
+  const path = snapshot.objects.find((o) => o.id === snapshot.editingPathId)
+  const hasVertexSelected = snapshot.selectedVertexIndex !== null
+  return (
+    <div className="col-span-2 mt-2 flex flex-col gap-2 rounded-md border border-dashed border-brass-500/50 bg-brass-500/5 p-3">
+      <p className="text-xs font-semibold uppercase tracking-wide text-brass-700">Editing Path</p>
+      <div className="flex flex-wrap gap-1.5">
+        <PanelIconButton icon={<Check className="h-4 w-4" />} label="Corner point" disabled={!hasVertexSelected} onClick={() => engine.setSelectedVertexSmooth(false)} />
+        <PanelIconButton icon={<FlipVertical2 className="h-4 w-4" />} label="Smooth point" disabled={!hasVertexSelected} onClick={() => engine.setSelectedVertexSmooth(true)} />
+        <PanelIconButton icon={<Trash2 className="h-4 w-4" />} label="Delete anchor" disabled={!hasVertexSelected} onClick={() => engine.deleteSelectedVertex()} />
+        {path && !path.pathClosed && <PanelIconButton icon={<Check className="h-4 w-4" />} label="Close path" onClick={() => engine.closeEditingPath()} />}
+        <PanelIconButton icon={<X className="h-4 w-4" />} label="Done editing" onClick={() => engine.exitPathEdit()} />
+      </div>
+    </div>
+  )
+}
+
+function PanelIconButton({ icon, label, disabled, onClick }: { icon: React.ReactNode; label: string; disabled?: boolean; onClick: () => void }) {
   return (
     <button
       title={label}
       aria-label={label}
       onClick={onClick}
-      className="flex h-9 flex-1 items-center justify-center rounded-md border border-ink-200 text-ink-600 transition-colors hover:border-ink-400 hover:bg-sand-50"
+      disabled={disabled}
+      className="flex h-9 flex-1 items-center justify-center rounded-md border border-ink-200 text-ink-600 transition-colors hover:border-ink-400 hover:bg-sand-50 disabled:cursor-not-allowed disabled:opacity-30"
     >
       {icon}
     </button>

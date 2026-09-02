@@ -17,9 +17,13 @@ const CURSOR_BY_TOOL: Record<string, string> = {
   text: 'text',
   measure: 'crosshair',
   lasso: 'crosshair',
+  pen: 'crosshair',
+  semicircle: 'crosshair',
+  trim: 'crosshair',
+  extend: 'crosshair',
 }
 
-const PRECISION_TOOLS = new Set(['rectangle', 'circle', 'line'])
+const PRECISION_TOOLS = new Set(['rectangle', 'circle', 'line', 'semicircle'])
 const DOUBLE_TAP_MS = 400
 const DOUBLE_TAP_DIST = 28
 const TAP_DRAG_THRESHOLD = 10
@@ -30,7 +34,7 @@ function isEditableTarget(el: EventTarget | null): boolean {
 }
 
 interface PrecisionPopupState {
-  tool: 'rectangle' | 'circle' | 'line'
+  tool: 'rectangle' | 'circle' | 'line' | 'semicircle'
   worldPoint: Point
   clientX: number
   clientY: number
@@ -136,7 +140,7 @@ export function CanvasSurface({ engine, snapshot }: CanvasSurfaceProps) {
       if (PRECISION_TOOLS.has(tool)) {
         engine.cancelDraft()
         setPrecisionPopup({
-          tool: tool as 'rectangle' | 'circle' | 'line',
+          tool: tool as 'rectangle' | 'circle' | 'line' | 'semicircle',
           worldPoint: engine.screenToWorld(pt),
           clientX: e.clientX,
           clientY: e.clientY,
@@ -159,6 +163,10 @@ export function CanvasSurface({ engine, snapshot }: CanvasSurfaceProps) {
             engine.startTextEdit(obj.id)
           })
         })
+        return true
+      }
+      if (obj && obj.type === 'path' && obj.pathVertices && !obj.locked && tool === 'select') {
+        engine.enterPathEdit(obj.id)
         return true
       }
       return false
@@ -298,6 +306,7 @@ export function CanvasSurface({ engine, snapshot }: CanvasSurfaceProps) {
           <div ref={precisionAnchorRef} className="pointer-events-none fixed h-px w-px" style={{ left: precisionPopup.clientX, top: precisionPopup.clientY }} />
           <PrecisionCreatePopup
             tool={precisionPopup.tool}
+            unit={snapshot.settings.unit}
             anchorRef={precisionAnchorRef}
             defaultFill={snapshot.activeFill === 'none' ? '#c9a15f' : snapshot.activeFill}
             defaultStroke={snapshot.activeStroke}
@@ -328,6 +337,42 @@ export function CanvasSurface({ engine, snapshot }: CanvasSurfaceProps) {
       {snapshot.drawingPolygon && snapshot.polygonPointCount > 0 && snapshot.polygonPointCount < 3 && (
         <div className="pointer-events-none absolute bottom-5 left-1/2 z-20 -translate-x-1/2 rounded-full bg-ink-900/85 px-4 py-2 text-xs font-medium text-sand-100">
           Tap to add points ({snapshot.polygonPointCount})
+        </div>
+      )}
+
+      {snapshot.tool === 'pen' && snapshot.penDraftVertexCount > 0 && (
+        <div className="absolute bottom-5 left-1/2 z-20 flex -translate-x-1/2 items-center gap-2">
+          <div className="pointer-events-none rounded-full bg-ink-900/85 px-4 py-2 text-xs font-medium text-sand-100">
+            {snapshot.penDraftVertexCount === 1 ? 'Tap to add points' : `${snapshot.penDraftVertexCount} points`}
+          </div>
+          {snapshot.penDraftVertexCount >= 3 && (
+            <button
+              onClick={() => engine.finishPen(true)}
+              className="rounded-full bg-brass-500 px-4 py-3 text-sm font-semibold text-white shadow-soft active:scale-95"
+            >
+              Close Path
+            </button>
+          )}
+          <button
+            onClick={() => engine.finishPen(false)}
+            className="rounded-full bg-ink-900 px-4 py-3 text-sm font-semibold text-sand-50 shadow-soft active:scale-95"
+          >
+            Finish Path
+          </button>
+        </div>
+      )}
+
+      {snapshot.editingPathId && (
+        <div className="absolute bottom-5 left-1/2 z-20 flex -translate-x-1/2 items-center gap-2">
+          <div className="pointer-events-none rounded-full bg-ink-900/85 px-4 py-2 text-xs font-medium text-sand-100">
+            Editing path
+          </div>
+          <button
+            onClick={() => engine.exitPathEdit()}
+            className="rounded-full bg-ink-900 px-4 py-3 text-sm font-semibold text-sand-50 shadow-soft active:scale-95"
+          >
+            Done
+          </button>
         </div>
       )}
     </div>

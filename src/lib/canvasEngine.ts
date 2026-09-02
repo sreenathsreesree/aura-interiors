@@ -4,16 +4,24 @@ import {
   boundsOfPoints,
   distance,
   distanceToPolyline,
+  distanceToSegment,
+  flattenCubicBezier,
   objectCenter,
   objectSnapPoints,
+  offsetPolygon,
   orthoConstrain,
   pointInCircle,
+  pointInMultiPolygon,
   pointInPolygon,
   pointInRotatedRect,
+  rayIntersectsSegment,
   rotatePoint,
   rotatedCorners,
+  segmentIntersection,
   snapPoint,
 } from '@/lib/canvasMath'
+import { computeBoolean, type BooleanOp } from '@/lib/booleanOps'
+import { formatLength, formatLengthPair, formatLengthValue, unitSuffix } from '@/lib/units'
 import type {
   CanvasDocument,
   CanvasLayer,
@@ -22,15 +30,25 @@ import type {
   CanvasSettings,
   CanvasToolId,
   CanvasUnit,
+  CopiedStyle,
   FillFit,
+  PathVertex,
   Point,
   PreciseCreateSpec,
 } from '@/types/canvas'
-import { CLOSED_SHAPE_TYPES } from '@/types/canvas'
+import { CLOSED_SHAPE_TYPES, BOOLEAN_COMPATIBLE_TYPES } from '@/types/canvas'
 import type { Material } from '@/types/materials'
 import { getMaterialById } from '@/data/materials'
 import { getMaterialPatternCanvas } from '@/lib/materialPatterns'
 import { getCachedImage, onImageReady } from '@/lib/imageUtils'
+
+// Re-exported so existing call sites (`import { formatDimension } from '@/lib/canvasEngine'`)
+// keep working unchanged — the actual conversion/formatting logic now lives
+// in the centralized `lib/units.ts`, per V3C's "don't scatter conversion
+// calculations throughout components" requirement.
+export { formatLength as formatDimension, formatLengthValue as formatDimensionValue, formatLengthPair as formatDimensionPair, unitSuffix } from '@/lib/units'
+export { mmToEditableNumber, parseLength, LengthParseError, defaultStepMm } from '@/lib/units'
+export type { CanvasUnit } from '@/lib/units'
 
 const MIN_SIZE = 20 // mm — smallest a drawn shape can collapse to
 const HANDLE_SCREEN_SIZE = 16 // px
@@ -67,7 +85,8 @@ interface DragState {
 }
 
 interface DraftState {
-  type: CanvasObjectType
+  /** 'semicircle' isn't a stored CanvasObjectType (it commits as an 'arc' with a fixed bulge+closed) — it only exists as a draft-in-progress marker. */
+  type: CanvasObjectType | 'semicircle'
   start: Point
   /** Screen-space point where the draft started — used to tell a tap from a drag. */
   startScreen: Point
@@ -96,6 +115,13 @@ export interface CanvasEngineSnapshot {
   polygonPointCount: number
   editingTextId: string | null
   clipboardCount: number
+  hasCopiedStyle: boolean
+  /** V3C Pen tool — id of the 'path' object currently in vertex-edit mode (double-clicked with Select), or null. */
+  editingPathId: string | null
+  /** V3C Pen tool — index into that path's `pathVertices` the designer last clicked, for Corner/Smooth/Delete actions. */
+  selectedVertexIndex: number | null
+  /** V3C Pen tool — vertex count of the in-progress draft while actively drawing a new path (0 when not drawing one). */
+  penDraftVertexCount: number
 }
 
 function clamp(v: number, min: number, max: number): number {
@@ -115,6 +141,36 @@ function measureTextSize(ctx: CanvasRenderingContext2D | null, text: string, fon
     return { width, height: fontSize * 1.4 }
   }
   return { width: Math.max((text || ' ').length * fontSize * 0.55, fontSize), height: fontSize * 1.4 }
+}
+
+/** V3C — greedy word-wrap for a fixed text-box width. Falls back to breaking an unbreakably-long single word rather than overflowing. */
+function wrapText(ctx: CanvasRenderingContext2D | null, text: string, fontSize: number, maxWidth: number, bold: boolean): string[] {
+  const words = (text || '').split(/\s+/).filter(Boolean)
+  if (words.length === 0) return ['']
+  if (!ctx) return [text]
+  ctx.save()
+  ctx.font = `${bold ? '700' : '400'} ${fontSize}px Manrope, sans-serif`
+  const lines: string[] = []
+  let line = ''
+  for (const word of words) {
+    const candidate = line ? `${line} ${word}` : word
+    if (ctx.measureText(candidate).width <= maxWidth || !line) {
+      line = candidate
+    } else {
+      lines.push(line)
+      line = word
+    }
+  }
+  if (line) lines.push(line)
+  ctx.restore()
+  return lines
+}
+
+/** Text bbox size accounting for word-wrap when `textBoxWidth` is set — width is fixed to it, height grows with the wrapped line count. Without it, behaves exactly like plain `measureTextSize` (single line, auto-width). */
+function measureTextBoxSize(ctx: CanvasRenderingContext2D | null, text: string, fontSize: number, textBoxWidth: number | undefined, bold: boolean) {
+  if (!textBoxWidth) return measureTextSize(ctx, text, fontSize)
+  const lines = wrapText(ctx, text, fontSize, textBoxWidth, bold)
+  return { width: textBoxWidth, height: Math.max(lines.length, 1) * fontSize * 1.3 }
 }
 
 export class CanvasEngine {
@@ -140,6 +196,23 @@ export class CanvasEngine {
   /** V3B lasso tool — world-space polyline while dragging; resolved into a selection on release, then cleared. */
   private lassoPoints: Point[] = []
 
+  /** V3C Pen tool — vertices of the path currently being drawn (world space, becomes local-to-bbox on commit), or null when not drawing one. */
+  private penDraft: PathVertex[] | null = null
+  /** V3C Pen tool — id of the 'path' object currently in vertex-edit mode (entered via double-click with Select active), or null. */
+  private editingPathId: string | null = null
+  /** V3C Pen tool — index into the editing path's vertices last clicked, target for Corner/Smooth/Delete. */
+  private selectedVertexIndex: number | null = null
+  /** V3C Pen tool edit-mode drag — which handle of which vertex is being dragged. */
+  private penDrag: { vertexIndex: number; part: 'anchor' | 'handleIn' | 'handleOut' } | null = null
+  private penDragBefore: CanvasObject[] | null = null
+  /** V3C Pen tool creation — screen point of the vertex currently being placed, used to tell a tap from a click-drag. */
+  private penDownScreen: Point | null = null
+  private penActiveVertexIndex: number | null = null
+  /** V3C Pen tool creation — live cursor position for the rubber-band preview segment while a path is being drawn. */
+  private penHoverPoint: Point | null = null
+  /** V3C text leader/callout — id of the text object waiting for its next canvas click to become the leader's target point, or null. */
+  private pendingLeaderTextId: string | null = null
+
   /** V3A Measure tool — always ephemeral: never written to doc.objects or undo history. */
   private measureDraft: { start: Point; current: Point } | null = null
   private lastMeasurement: { a: Point; b: Point; distance: number; dx: number; dy: number } | null = null
@@ -153,6 +226,8 @@ export class CanvasEngine {
   private activeMaterial: Material | null = null
   private recentColors: string[] = []
   private clipboard: CanvasObject[] = []
+  /** V3C Copy Style / Paste Style — visual properties only, kept separate from the geometry clipboard above. */
+  private styleClipboard: CopiedStyle | null = null
   private editingTextId: string | null = null
 
   private listeners = new Set<() => void>()
@@ -198,6 +273,10 @@ export class CanvasEngine {
       polygonPointCount: this.draft?.type === 'polygon' ? this.draft.points.length : 0,
       editingTextId: this.editingTextId,
       clipboardCount: this.clipboard.length,
+      hasCopiedStyle: this.styleClipboard !== null,
+      editingPathId: this.editingPathId,
+      selectedVertexIndex: this.selectedVertexIndex,
+      penDraftVertexCount: this.penDraft?.length ?? 0,
     }
     return this.snapshotCache
   }
@@ -399,8 +478,18 @@ export class CanvasEngine {
     this.cancelDraft()
     if (tool !== 'measure') this.clearMeasurement()
     this.lassoPoints = []
+    // Leaving Pen mid-path finishes what's already drawn as an open path
+    // rather than silently discarding it — losing several already-placed
+    // anchors to an accidental tool switch would be a much worse experience
+    // than just ending up with an open (rather than closed) path.
+    if (tool !== 'pen' && this.penDraft) this.finishPen(false)
+    if (tool !== 'select' && tool !== 'pen') this.exitPathEdit()
     this.tool = tool
-    if (tool !== 'select') this.selection = []
+    // Eyedropper is exempt: its whole point (per pickColorAt) is sampling a
+    // colour/style and applying it immediately to whatever is already
+    // selected — clearing the selection the instant the tool is armed would
+    // make that primary workflow impossible to reach from the toolbar.
+    if (tool !== 'select' && tool !== 'eyedropper') this.selection = []
     this.notify()
     this.scheduleRender()
   }
@@ -561,8 +650,8 @@ export class CanvasEngine {
       objects: this.doc.objects.map((o) => {
         if (!this.selection.includes(o.id) || o.locked) return o
         const next = { ...o, ...patch }
-        if ((patch.text !== undefined || patch.fontSize !== undefined) && next.type === 'text') {
-          const size = measureTextSize(this.ctx, next.text ?? '', next.fontSize ?? 32)
+        if ((patch.text !== undefined || patch.fontSize !== undefined || patch.textBoxWidth !== undefined || patch.fontWeight !== undefined) && next.type === 'text') {
+          const size = measureTextBoxSize(this.ctx, next.text ?? '', next.fontSize ?? 32, next.textBoxWidth, next.fontWeight === 'bold')
           next.width = size.width
           next.height = size.height
         }
@@ -604,12 +693,24 @@ export class CanvasEngine {
     this.scheduleRender()
   }
 
-  cycleUnit() {
-    const order: CanvasUnit[] = ['mm', 'cm', 'm']
-    const next = order[(order.indexOf(this.doc.settings.unit) + 1) % order.length]
-    this.doc = { ...this.doc, settings: { ...this.doc.settings, unit: next } }
+  /**
+   * V3C — a pure display setting, exactly like `unit` always was: it only
+   * changes how `formatLength`/`parseLength` read and print `doc.objects`'
+   * mm fields, never the fields themselves. Consistent with every other
+   * settings toggle in this file (grid/snap/ortho/showDimensions), this
+   * isn't part of the object-undo history — there is nothing here that
+   * undo needs to reverse, since no geometry ever changes.
+   */
+  setUnit(unit: CanvasUnit) {
+    this.doc = { ...this.doc, settings: { ...this.doc.settings, unit } }
     this.notify()
     this.scheduleRender()
+  }
+
+  cycleUnit() {
+    const order: CanvasUnit[] = ['mm', 'cm', 'm', 'in', 'ft', 'ftin']
+    const next = order[(order.indexOf(this.doc.settings.unit) + 1) % order.length]
+    this.setUnit(next)
   }
 
   setViewMode(mode: CanvasSettings['viewMode']) {
@@ -795,15 +896,39 @@ export class CanvasEngine {
     this.scheduleRender()
   }
 
-  mirrorSelected(axis: 'horizontal' | 'vertical') {
-    if (this.selection.length === 0) return
-    this.applyToSelection((o) => {
-      if (!o.points) return { ...o, rotation: axis === 'horizontal' ? (360 - o.rotation) % 360 : (180 - o.rotation + 360) % 360 }
-      const points = o.points.map((p) =>
-        axis === 'horizontal' ? { x: o.width - p.x, y: p.y } : { x: p.x, y: o.height - p.y },
-      )
-      return { ...o, points }
-    })
+  /**
+   * V3C Flip Horizontal/Vertical (supersedes the old single-object-only
+   * "Mirror"). Every selected object gets its own shape mirrored exactly as
+   * before, but its POSITION now also reflects across the whole selection's
+   * combined bounds — for a single object those bounds ARE the object's own
+   * bounds, so the position term is a no-op and it still flips in place
+   * (unchanged V1 behaviour); for a multi-selection or a group, two
+   * side-by-side objects actually swap sides, which is what "flip a group"
+   * has to mean to be useful rather than just mirroring each member
+   * privately in place.
+   */
+  flipSelected(axis: 'horizontal' | 'vertical') {
+    const targets = this.doc.objects.filter((o) => this.selection.includes(o.id) && !o.locked)
+    if (targets.length === 0) return
+    const before = this.snapshot()
+    const overall = CanvasEngine.boundsOfObjects(targets)
+    const targetIds = new Set(targets.map((t) => t.id))
+    this.doc = {
+      ...this.doc,
+      objects: this.doc.objects.map((o) => {
+        if (!targetIds.has(o.id)) return o
+        const next: CanvasObject = { ...o }
+        if (o.points) {
+          next.points = o.points.map((p) => (axis === 'horizontal' ? { x: o.width - p.x, y: p.y } : { x: p.x, y: o.height - p.y }))
+        } else {
+          next.rotation = axis === 'horizontal' ? (360 - o.rotation) % 360 : (180 - o.rotation + 360) % 360
+        }
+        if (axis === 'horizontal') next.x = 2 * overall.x + overall.width - o.x - o.width
+        else next.y = 2 * overall.y + overall.height - o.y - o.height
+        return next
+      }),
+    }
+    this.commit(before)
     this.notify()
     this.scheduleRender()
   }
@@ -818,6 +943,25 @@ export class CanvasEngine {
   toggleVisibleSelected() {
     if (this.selection.length === 0) return
     this.applyToSelection((o) => ({ ...o, visible: !o.visible }), { includeLocked: true })
+    this.notify()
+    this.scheduleRender()
+  }
+
+  /** Section 8 — uniform radius for every selected rectangle/square, clearing any per-corner override. */
+  setUniformCornerRadius(radiusMm: number) {
+    this.applyToSelection((o) => (o.type === 'rectangle' || o.type === 'square' ? { ...o, cornerRadius: Math.max(0, radiusMm), cornerRadii: undefined } : o))
+    this.notify()
+    this.scheduleRender()
+  }
+
+  /** Section 8 — one corner at a time, merged into whatever the object already has (falling back to the legacy uniform value for corners not yet customised). */
+  setCornerRadius(corner: 'topLeft' | 'topRight' | 'bottomRight' | 'bottomLeft', radiusMm: number) {
+    this.applyToSelection((o) => {
+      if (o.type !== 'rectangle' && o.type !== 'square') return o
+      const base = o.cornerRadius ?? 0
+      const cornerRadii = { topLeft: base, topRight: base, bottomRight: base, bottomLeft: base, ...o.cornerRadii, [corner]: Math.max(0, radiusMm) }
+      return { ...o, cornerRadii }
+    })
     this.notify()
     this.scheduleRender()
   }
@@ -1023,17 +1167,95 @@ export class CanvasEngine {
     this.scheduleRender()
   }
 
+  /**
+   * Section 10 — Eyedropper. Colour capture is unchanged from V1; V3C adds
+   * stroke and opacity to what it samples. When something is already
+   * selected, the sampled style applies to it immediately (matching how
+   * picking a plain colour already behaves via setActiveFill) — "sample an
+   * object's properties and apply them to another object" in one click.
+   * With nothing selected, it just becomes the active style for the next
+   * shape you draw, same as always.
+   */
   private pickColorAt(worldPt: Point) {
     const target = this.hitTest(worldPt)
     if (!target) return
-    // Colour eyedropper always captures the object's flat colour, unchanged from V1.
     this.activeFill = target.fill
     this.pushRecentColor(target.fill)
-    // Material/image objects additionally hand back their material, where one exists,
-    // so a filled shape's look can be reused elsewhere without breaking the colour capture above.
     this.activeMaterial = target.fillType === 'texture' && target.materialId ? (getMaterialById(target.materialId) ?? null) : null
+    this.activeStroke = target.stroke
+    this.activeStrokeWidth = target.strokeWidth
+    this.activeOpacity = target.opacity
     this.tool = 'select'
+    if (this.selection.length > 0) {
+      this.applyToSelection((o) => ({
+        ...o,
+        fillType: target.fillType,
+        fill: target.fill,
+        materialId: target.materialId,
+        imageData: target.imageData,
+        fillFit: target.fillFit,
+        stroke: target.stroke,
+        strokeEnabled: target.strokeEnabled,
+        strokeWidth: target.strokeWidth,
+        opacity: target.opacity,
+      }))
+    }
     this.notify()
+    this.scheduleRender()
+  }
+
+  /** Section 11 — Copy Style: snapshots the primary selected object's visual properties only, never geometry. */
+  copyStyle() {
+    const o = this.doc.objects.find((oo) => oo.id === this.selection[0])
+    if (!o) return
+    this.styleClipboard = {
+      fillType: o.fillType,
+      fill: o.fill,
+      opacity: o.opacity,
+      strokeEnabled: o.strokeEnabled,
+      stroke: o.stroke,
+      strokeWidth: o.strokeWidth,
+      materialId: o.materialId,
+      imageData: o.imageData,
+      fillFit: o.fillFit,
+      textureScale: o.textureScale,
+      textureOffset: o.textureOffset,
+      textureRotation: o.textureRotation,
+      cornerRadius: o.cornerRadius,
+      cornerRadii: o.cornerRadii,
+    }
+    this.notify()
+  }
+
+  /** Section 11 — Paste Style: applies the copied visual properties to every selected object, leaving each one's own geometry untouched. */
+  pasteStyle() {
+    if (!this.styleClipboard || this.selection.length === 0) return
+    const style = this.styleClipboard
+    this.applyToSelection((o) => {
+      const next: CanvasObject = { ...o, ...style }
+      // Corner radius only means something on a rectangle/square — never let pasting a
+      // rounded rectangle's style onto a circle or line silently graft an unused field on.
+      if (o.type !== 'rectangle' && o.type !== 'square') {
+        next.cornerRadius = o.cornerRadius
+        next.cornerRadii = o.cornerRadii
+      }
+      return next
+    })
+    this.notify()
+    this.scheduleRender()
+  }
+
+  /** V3C — arms "the next canvas click sets this text's leader/callout target point." */
+  startAddLeader(textId: string) {
+    this.pendingLeaderTextId = textId
+  }
+
+  removeLeader(textId: string) {
+    const before = this.snapshot()
+    this.doc = { ...this.doc, objects: this.doc.objects.map((o) => (o.id === textId ? { ...o, calloutTarget: undefined } : o)) }
+    this.commit(before)
+    this.notify()
+    this.scheduleRender()
   }
 
   // -------------------------------------------------------------- text
@@ -1048,7 +1270,7 @@ export class CanvasEngine {
       ...this.doc,
       objects: this.doc.objects.map((o) => {
         if (o.id !== id) return o
-        const size = measureTextSize(this.ctx, text, o.fontSize ?? 32)
+        const size = measureTextBoxSize(this.ctx, text, o.fontSize ?? 32, o.textBoxWidth, o.fontWeight === 'bold')
         return { ...o, text, width: size.width, height: size.height }
       }),
     }
@@ -1128,6 +1350,501 @@ export class CanvasEngine {
     this.marqueeRect = null
     this.lassoPoints = []
     this.alignmentGuides = {}
+    this.penActiveVertexIndex = null
+    this.penDrag = null
+    this.penDragBefore = null
+    this.scheduleRender()
+  }
+
+  // ---------------------------------------------------------- V3C Pen tool
+  private penPathObject(): CanvasObject | undefined {
+    return this.editingPathId ? this.doc.objects.find((o) => o.id === this.editingPathId) : undefined
+  }
+
+  private pointerDownPen(screenPt: Point, worldRaw: Point) {
+    if (!this.penDraft) this.penDraft = []
+    if (this.penDraft.length >= 2) {
+      const firstScreen = this.worldToScreen(this.penDraft[0])
+      if (distance(firstScreen, screenPt) < 20) {
+        this.finishPen(true)
+        return
+      }
+    }
+    const world = this.maybeSnap(worldRaw)
+    this.penDraft.push({ x: world.x, y: world.y })
+    this.penActiveVertexIndex = this.penDraft.length - 1
+    this.penDownScreen = screenPt
+    this.notify()
+    this.scheduleRender()
+  }
+
+  /** Commits the in-progress Pen draft as a new 'path' object. `closed` false discards a draft with fewer than 2 vertices. */
+  finishPen(closed: boolean) {
+    const draft = this.penDraft
+    this.penDraft = null
+    this.penActiveVertexIndex = null
+    this.penHoverPoint = null
+    if (!draft || draft.length < 2) {
+      this.notify()
+      this.scheduleRender()
+      return
+    }
+    const before = this.snapshot()
+    const allPts: Point[] = []
+    for (const v of draft) {
+      allPts.push({ x: v.x, y: v.y })
+      if (v.handleIn) allPts.push(v.handleIn)
+      if (v.handleOut) allPts.push(v.handleOut)
+    }
+    const bounds = boundsOfPoints(allPts)
+    const obj = this.baseObject('path', bounds.x, bounds.y, Math.max(bounds.width, 1), Math.max(bounds.height, 1))
+    obj.pathVertices = draft.map((v) => ({
+      x: v.x - bounds.x,
+      y: v.y - bounds.y,
+      handleIn: v.handleIn ? { x: v.handleIn.x - bounds.x, y: v.handleIn.y - bounds.y } : undefined,
+      handleOut: v.handleOut ? { x: v.handleOut.x - bounds.x, y: v.handleOut.y - bounds.y } : undefined,
+      smooth: v.smooth,
+    }))
+    obj.pathClosed = closed
+    obj.fillType = 'color'
+    this.doc = { ...this.doc, objects: [...this.doc.objects, obj] }
+    this.selection = [obj.id]
+    this.commit(before)
+    this.tool = 'select'
+    this.notify()
+    this.scheduleRender()
+  }
+
+  /** Discards the in-progress Pen draft without creating anything. */
+  cancelPen() {
+    this.penDraft = null
+    this.penActiveVertexIndex = null
+    this.penHoverPoint = null
+    this.scheduleRender()
+  }
+
+  /** Enters vertex-edit mode for a 'path' object (double-click with Select, mirroring the existing double-click-to-edit-text pattern). */
+  enterPathEdit(id: string) {
+    const obj = this.doc.objects.find((o) => o.id === id)
+    if (!obj || obj.type !== 'path' || !obj.pathVertices || obj.locked) return
+    this.editingPathId = id
+    this.selectedVertexIndex = null
+    this.selection = [id]
+    this.notify()
+    this.scheduleRender()
+  }
+
+  exitPathEdit() {
+    if (!this.editingPathId) return
+    this.editingPathId = null
+    this.selectedVertexIndex = null
+    this.notify()
+    this.scheduleRender()
+  }
+
+  /** Hit-tests the editing path's anchor/handle dots in screen space. */
+  private hitTestPathHandle(o: CanvasObject, screenPt: Point): { vertexIndex: number; part: 'anchor' | 'handleIn' | 'handleOut' } | null {
+    if (!o.pathVertices) return null
+    const hitRadius = HANDLE_SCREEN_SIZE / 2 + HANDLE_HIT_PADDING
+    for (let i = 0; i < o.pathVertices.length; i++) {
+      const v = o.pathVertices[i]
+      const anchorWorld = { x: o.x + v.x, y: o.y + v.y }
+      if (distance(this.worldToScreen(anchorWorld), screenPt) <= hitRadius) return { vertexIndex: i, part: 'anchor' }
+      if (v.handleOut) {
+        const hWorld = { x: o.x + v.handleOut.x, y: o.y + v.handleOut.y }
+        if (distance(this.worldToScreen(hWorld), screenPt) <= hitRadius) return { vertexIndex: i, part: 'handleOut' }
+      }
+      if (v.handleIn) {
+        const hWorld = { x: o.x + v.handleIn.x, y: o.y + v.handleIn.y }
+        if (distance(this.worldToScreen(hWorld), screenPt) <= hitRadius) return { vertexIndex: i, part: 'handleIn' }
+      }
+    }
+    return null
+  }
+
+  /** Returns true if the click was consumed by path-edit interaction (handle grabbed, or a new anchor inserted). */
+  private pointerDownPathEdit(screenPt: Point, worldRaw: Point): boolean {
+    const obj = this.penPathObject()
+    if (!obj || !obj.pathVertices) {
+      this.exitPathEdit()
+      return false
+    }
+    const hit = this.hitTestPathHandle(obj, screenPt)
+    if (hit) {
+      this.selectedVertexIndex = hit.vertexIndex
+      this.penDrag = hit
+      this.penDragBefore = this.snapshot()
+      this.notify()
+      return true
+    }
+    if (this.tool === 'pen') {
+      const inserted = this.insertVertexOnPath(obj, worldRaw)
+      if (inserted) return true
+    }
+    return false
+  }
+
+  private pointerMovePenDrag(screenPt: Point) {
+    const drag = this.penDrag
+    const obj = this.penPathObject()
+    if (!drag || !obj || !obj.pathVertices) return
+    const worldRaw = this.screenToWorld(screenPt)
+    const local = { x: worldRaw.x - obj.x, y: worldRaw.y - obj.y }
+    this.doc = {
+      ...this.doc,
+      objects: this.doc.objects.map((o) => {
+        if (o.id !== obj.id || !o.pathVertices) return o
+        const vertices = o.pathVertices.map((v, i) => {
+          if (i !== drag.vertexIndex) return v
+          const next: PathVertex = { ...v }
+          if (drag.part === 'anchor') {
+            const dx = local.x - v.x
+            const dy = local.y - v.y
+            next.x = local.x
+            next.y = local.y
+            if (v.handleIn) next.handleIn = { x: v.handleIn.x + dx, y: v.handleIn.y + dy }
+            if (v.handleOut) next.handleOut = { x: v.handleOut.x + dx, y: v.handleOut.y + dy }
+          } else if (drag.part === 'handleOut') {
+            next.handleOut = local
+            if (v.smooth) next.handleIn = { x: 2 * v.x - local.x, y: 2 * v.y - local.y }
+          } else {
+            next.handleIn = local
+            if (v.smooth) next.handleOut = { x: 2 * v.x - local.x, y: 2 * v.y - local.y }
+          }
+          return next
+        })
+        return { ...o, pathVertices: vertices }
+      }),
+    }
+    this.scheduleRender()
+  }
+
+  /** Splits the nearest flattened segment of `obj`'s path at the point closest to `worldPt`, inserting a plain corner vertex there. Returns false if the click wasn't actually close enough to the path to mean "insert here". */
+  private insertVertexOnPath(obj: CanvasObject, worldPt: Point): boolean {
+    if (!obj.pathVertices || obj.pathVertices.length < 2) return false
+    const padding = 8 / this.viewport.zoom
+    const segmentCount = obj.pathClosed ? obj.pathVertices.length : obj.pathVertices.length - 1
+    let best: { segIndex: number; point: Point; dist: number } | null = null
+    for (let i = 0; i < segmentCount; i++) {
+      const a = obj.pathVertices[i]
+      const b = obj.pathVertices[(i + 1) % obj.pathVertices.length]
+      const flat = flattenCubicBezier({ x: obj.x + a.x, y: obj.y + a.y }, { x: obj.x + (a.handleOut?.x ?? a.x), y: obj.y + (a.handleOut?.y ?? a.y) }, { x: obj.x + (b.handleIn?.x ?? b.x), y: obj.y + (b.handleIn?.y ?? b.y) }, { x: obj.x + b.x, y: obj.y + b.y }, 12)
+      for (let s = 0; s < flat.length - 1; s++) {
+        const d = distanceToSegment(worldPt, flat[s], flat[s + 1])
+        if (!best || d < best.dist) best = { segIndex: i, point: worldPt, dist: d }
+      }
+    }
+    if (!best || best.dist > padding + (obj.strokeWidth ?? 1)) return false
+    const before = this.snapshot()
+    const newVertex: PathVertex = { x: worldPt.x - obj.x, y: worldPt.y - obj.y }
+    this.doc = {
+      ...this.doc,
+      objects: this.doc.objects.map((o) => {
+        if (o.id !== obj.id || !o.pathVertices) return o
+        const vertices = [...o.pathVertices]
+        vertices.splice(best!.segIndex + 1, 0, newVertex)
+        return { ...o, pathVertices: vertices }
+      }),
+    }
+    this.selectedVertexIndex = best.segIndex + 1
+    this.commit(before)
+    this.notify()
+    this.scheduleRender()
+    return true
+  }
+
+  /** Deletes the currently-selected vertex of the path being edited (needs at least 3 remaining, or 2 for an open path). */
+  deleteSelectedVertex() {
+    const obj = this.penPathObject()
+    if (!obj || !obj.pathVertices || this.selectedVertexIndex === null) return
+    const minCount = obj.pathClosed ? 3 : 2
+    if (obj.pathVertices.length <= minCount) return
+    const before = this.snapshot()
+    const index = this.selectedVertexIndex
+    this.doc = {
+      ...this.doc,
+      objects: this.doc.objects.map((o) => (o.id === obj.id && o.pathVertices ? { ...o, pathVertices: o.pathVertices.filter((_, i) => i !== index) } : o)),
+    }
+    this.selectedVertexIndex = null
+    this.commit(before)
+    this.notify()
+    this.scheduleRender()
+  }
+
+  /** Corner <-> Smooth for the selected vertex. Converting to Smooth grows symmetric handles along the vertex's local tangent when it has none yet; converting to Corner just drops both handles. */
+  setSelectedVertexSmooth(smooth: boolean) {
+    const obj = this.penPathObject()
+    if (!obj || !obj.pathVertices || this.selectedVertexIndex === null) return
+    const before = this.snapshot()
+    const index = this.selectedVertexIndex
+    this.doc = {
+      ...this.doc,
+      objects: this.doc.objects.map((o) => {
+        if (o.id !== obj.id || !o.pathVertices) return o
+        const vertices = o.pathVertices.map((v, i) => {
+          if (i !== index) return v
+          if (!smooth) return { ...v, smooth: false, handleIn: undefined, handleOut: undefined }
+          const prev = o.pathVertices![(i - 1 + o.pathVertices!.length) % o.pathVertices!.length]
+          const next = o.pathVertices![(i + 1) % o.pathVertices!.length]
+          const dx = (next.x - prev.x) / 4
+          const dy = (next.y - prev.y) / 4
+          return { ...v, smooth: true, handleIn: v.handleIn ?? { x: v.x - dx, y: v.y - dy }, handleOut: v.handleOut ?? { x: v.x + dx, y: v.y + dy } }
+        })
+        return { ...o, pathVertices: vertices }
+      }),
+    }
+    this.commit(before)
+    this.notify()
+    this.scheduleRender()
+  }
+
+  // -------------------------------------------------------------- V3C Offset
+  /**
+   * Section 13 — creates a new parallel copy of every selected compatible
+   * shape (line, rectangle/square, circle, polygon, or a straight-edged
+   * Boolean-result path), offset by `distanceMm` (negative = inward/
+   * shrink). The sources are left untouched; the new offset copies become
+   * the selection. Practical for wall thickness, panel/groove/border
+   * spacing — not a general CAD offset engine (see `offsetPolygon`'s docs
+   * for the polygon case's known limits).
+   */
+  offsetSelected(distanceMm: number) {
+    const targets = this.doc.objects.filter((o) => this.selection.includes(o.id) && !o.locked)
+    if (targets.length === 0 || distanceMm === 0) return
+    const before = this.snapshot()
+    const copies: CanvasObject[] = []
+    for (const o of targets) {
+      if (o.type === 'line' && o.points && o.points.length >= 2) {
+        const [p1, p2] = o.points
+        const dx = p2.x - p1.x
+        const dy = p2.y - p1.y
+        const len = Math.hypot(dx, dy) || 1
+        const nx = (-dy / len) * distanceMm
+        const ny = (dx / len) * distanceMm
+        copies.push({ ...o, id: generateId('obj'), points: [{ x: p1.x + nx, y: p1.y + ny }, { x: p2.x + nx, y: p2.y + ny }] })
+      } else if (o.type === 'rectangle' || o.type === 'square' || o.type === 'circle') {
+        const newWidth = Math.max(o.width + 2 * distanceMm, MIN_SIZE)
+        const newHeight = Math.max(o.height + 2 * distanceMm, MIN_SIZE)
+        copies.push({ ...o, id: generateId('obj'), x: o.x - distanceMm, y: o.y - distanceMm, width: newWidth, height: newHeight })
+      } else if (o.type === 'polygon' && o.points && o.points.length >= 3) {
+        const offsetPts = offsetPolygon(o.points, distanceMm)
+        if (offsetPts) copies.push({ ...o, id: generateId('obj'), points: offsetPts })
+      } else if (o.type === 'path' && o.pathSubpaths) {
+        const offsetSubs = o.pathSubpaths.map((loop) => offsetPolygon(loop, distanceMm)).filter((l): l is Point[] => l !== null)
+        if (offsetSubs.length > 0) copies.push({ ...o, id: generateId('obj'), pathSubpaths: offsetSubs })
+      }
+    }
+    if (copies.length === 0) return
+    this.doc = { ...this.doc, objects: [...this.doc.objects, ...copies] }
+    this.selection = copies.map((c) => c.id)
+    this.commit(before)
+    this.notify()
+    this.scheduleRender()
+  }
+
+  // -------------------------------------------------------- V3C Trim/Extend
+  /**
+   * Sections 14/15 — Trim and Extend are scoped to straight, UNROTATED
+   * 'line' objects (matching the spec's own "two intersecting lines"
+   * example) rather than every geometry type; trimming/extending against
+   * curved or rotated edges is a materially harder problem and explicitly
+   * out of scope for a "keep it lightweight, predictable" tool. Both are
+   * driven by a single click with the Trim/Extend tool active.
+   */
+  private pointerDownTrim(worldPt: Point) {
+    const target = this.hitTest(worldPt)
+    if (!target || target.type !== 'line' || target.rotation !== 0 || !target.points || target.points.length < 2 || target.locked) return
+    const p1 = { x: target.x + target.points[0].x, y: target.y + target.points[0].y }
+    const p2 = { x: target.x + target.points[1].x, y: target.y + target.points[1].y }
+
+    let best: Point | null = null
+    let bestDist = Infinity
+    for (const other of this.doc.objects) {
+      if (other.id === target.id || other.type !== 'line' || !other.visible || !other.points || other.points.length < 2) continue
+      const op1 = { x: other.x + other.points[0].x, y: other.y + other.points[0].y }
+      const op2 = { x: other.x + other.points[1].x, y: other.y + other.points[1].y }
+      const hit = segmentIntersection(p1, p2, op1, op2)
+      if (!hit) continue
+      const d = distance(worldPt, hit)
+      if (d < bestDist) {
+        bestDist = d
+        best = hit
+      }
+    }
+    if (!best) return
+
+    const trimToward1 = distance(worldPt, p1) < distance(worldPt, p2)
+    const newP1 = trimToward1 ? best : p1
+    const newP2 = trimToward1 ? p2 : best
+    if (distance(newP1, newP2) < 1) return
+    const before = this.snapshot()
+    const bounds = boundsOfPoints([newP1, newP2])
+    this.doc = {
+      ...this.doc,
+      objects: this.doc.objects.map((o) =>
+        o.id === target.id
+          ? { ...o, x: bounds.x, y: bounds.y, width: Math.max(bounds.width, 1), height: Math.max(bounds.height, 1), points: [{ x: newP1.x - bounds.x, y: newP1.y - bounds.y }, { x: newP2.x - bounds.x, y: newP2.y - bounds.y }] }
+          : o,
+      ),
+    }
+    this.commit(before)
+    this.notify()
+    this.scheduleRender()
+  }
+
+  private pointerDownExtend(worldPt: Point) {
+    const target = this.hitTest(worldPt)
+    if (!target || target.type !== 'line' || target.rotation !== 0 || !target.points || target.points.length < 2 || target.locked) return
+    const p1 = { x: target.x + target.points[0].x, y: target.y + target.points[0].y }
+    const p2 = { x: target.x + target.points[1].x, y: target.y + target.points[1].y }
+    const extendFrom1 = distance(worldPt, p1) < distance(worldPt, p2)
+    const origin = extendFrom1 ? p2 : p1 // the end that stays put — the ray fires FROM here THROUGH the end being extended
+    const movingEnd = extendFrom1 ? p1 : p2
+    const dir = { x: movingEnd.x - origin.x, y: movingEnd.y - origin.y }
+    const len = Math.hypot(dir.x, dir.y) || 1
+    const dirUnit = { x: dir.x / len, y: dir.y / len }
+
+    let best: Point | null = null
+    let bestT = Infinity
+    for (const other of this.doc.objects) {
+      if (other.id === target.id || other.type !== 'line' || !other.visible || !other.points || other.points.length < 2) continue
+      const op1 = { x: other.x + other.points[0].x, y: other.y + other.points[0].y }
+      const op2 = { x: other.x + other.points[1].x, y: other.y + other.points[1].y }
+      const hit = rayIntersectsSegment(origin, dirUnit, op1, op2)
+      if (!hit) continue
+      const t = distance(origin, hit)
+      if (t > len + 1 && t < bestT) {
+        bestT = t
+        best = hit
+      }
+    }
+    if (!best) return
+    const before = this.snapshot()
+    const newP1 = extendFrom1 ? best : p1
+    const newP2 = extendFrom1 ? p2 : best
+    const bounds = boundsOfPoints([newP1, newP2])
+    this.doc = {
+      ...this.doc,
+      objects: this.doc.objects.map((o) =>
+        o.id === target.id
+          ? { ...o, x: bounds.x, y: bounds.y, width: Math.max(bounds.width, 1), height: Math.max(bounds.height, 1), points: [{ x: newP1.x - bounds.x, y: newP1.y - bounds.y }, { x: newP2.x - bounds.x, y: newP2.y - bounds.y }] }
+          : o,
+      ),
+    }
+    this.commit(before)
+    this.notify()
+    this.scheduleRender()
+  }
+
+  // ------------------------------------------------------------- V3C Boolean
+  /**
+   * Section 9 — Union/Subtract/Intersect/Exclude on exactly 2 compatible
+   * selected shapes (rectangle/square/circle/polygon/path). Rasterizes both
+   * shapes and vectorizes the composited result back into a single new
+   * 'path' object (see lib/booleanOps.ts for why); the two sources are
+   * removed and the result becomes the new selection.
+   */
+  booleanSelected(op: BooleanOp) {
+    const targets = this.doc.objects.filter((o) => this.selection.includes(o.id) && !o.locked && BOOLEAN_COMPATIBLE_TYPES.includes(o.type))
+    if (targets.length !== 2) return
+    const [a, b] = targets
+    const bounds = CanvasEngine.boundsOfObjects(targets)
+    const padded = { x: bounds.x - 10, y: bounds.y - 10, width: bounds.width + 20, height: bounds.height + 20 }
+
+    const paint = (o: CanvasObject) => (ctx: CanvasRenderingContext2D) => {
+      const center = objectCenter(o)
+      ctx.save()
+      ctx.translate(center.x, center.y)
+      ctx.rotate(degToRadLocal(o.rotation))
+      const hw = o.width / 2
+      const hh = o.height / 2
+      const local = (p: Point) => ({ x: p.x - hw, y: p.y - hh })
+      this.buildObjectFillPath(ctx, o, hw, hh, local)
+      ctx.fill('evenodd')
+      ctx.restore()
+    }
+
+    const subpaths = computeBoolean(paint(a), paint(b), padded, op)
+    const before = this.snapshot()
+    if (subpaths.length === 0) {
+      // Nothing survived (e.g. Subtract with no overlap, or Intersect of shapes that don't touch) — just remove the sources.
+      this.doc = { ...this.doc, objects: this.doc.objects.filter((o) => o.id !== a.id && o.id !== b.id) }
+      this.selection = []
+      this.commit(before)
+      this.notify()
+      this.scheduleRender()
+      return
+    }
+    const resultBounds = boundsOfPoints(subpaths.flat())
+    const result = this.baseObject('path', resultBounds.x, resultBounds.y, Math.max(resultBounds.width, 1), Math.max(resultBounds.height, 1))
+    result.pathSubpaths = subpaths.map((loop) => loop.map((p) => ({ x: p.x - resultBounds.x, y: p.y - resultBounds.y })))
+    result.fill = a.fill
+    result.fillType = a.fillType
+    result.materialId = a.materialId
+    result.stroke = a.stroke
+    result.strokeWidth = a.strokeWidth
+    result.strokeEnabled = a.strokeEnabled
+    result.opacity = a.opacity
+    result.layerId = a.layerId
+
+    this.doc = { ...this.doc, objects: [...this.doc.objects.filter((o) => o.id !== a.id && o.id !== b.id), result] }
+    this.selection = [result.id]
+    this.commit(before)
+    this.notify()
+    this.scheduleRender()
+  }
+
+  /** Builds just the fill path (no stroke/paint) for a shape in already-translated/rotated local space — shared by drawObject and the Boolean-op rasterizer so both agree on exactly the same geometry. */
+  private buildObjectFillPath(ctx: CanvasRenderingContext2D, o: CanvasObject, hw: number, hh: number, local: (p: Point) => Point) {
+    switch (o.type) {
+      case 'rectangle':
+      case 'square':
+        ctx.beginPath()
+        if (o.cornerRadii) {
+          const maxR = Math.min(hw, hh)
+          ctx.roundRect(-hw, -hh, o.width, o.height, [
+            clamp(o.cornerRadii.topLeft ?? 0, 0, maxR),
+            clamp(o.cornerRadii.topRight ?? 0, 0, maxR),
+            clamp(o.cornerRadii.bottomRight ?? 0, 0, maxR),
+            clamp(o.cornerRadii.bottomLeft ?? 0, 0, maxR),
+          ])
+        } else if (o.cornerRadius && o.cornerRadius > 0) {
+          ctx.roundRect(-hw, -hh, o.width, o.height, Math.min(o.cornerRadius, hw, hh))
+        } else {
+          ctx.rect(-hw, -hh, o.width, o.height)
+        }
+        break
+      case 'circle':
+        ctx.beginPath()
+        ctx.ellipse(0, 0, Math.max(hw, 0.01), Math.max(hh, 0.01), 0, 0, Math.PI * 2)
+        break
+      case 'polygon': {
+        ctx.beginPath()
+        if (o.points && o.points.length >= 2) {
+          const pts = o.points.map(local)
+          ctx.moveTo(pts[0].x, pts[0].y)
+          for (const p of pts.slice(1)) ctx.lineTo(p.x, p.y)
+          ctx.closePath()
+        }
+        break
+      }
+      case 'path':
+        this.buildPathGeometry(ctx, o, local)
+        break
+      default:
+        ctx.beginPath()
+        ctx.rect(-hw, -hh, o.width, o.height)
+    }
+  }
+
+  /** Closes the path currently being edited (an open Pen path only). */
+  closeEditingPath() {
+    const obj = this.penPathObject()
+    if (!obj || obj.pathClosed) return
+    const before = this.snapshot()
+    this.doc = { ...this.doc, objects: this.doc.objects.map((o) => (o.id === obj.id ? { ...o, pathClosed: true } : o)) }
+    this.commit(before)
+    this.notify()
     this.scheduleRender()
   }
 
@@ -1179,6 +1896,28 @@ export class CanvasEngine {
         const abs = o.points.map((p) => ({ x: o.x + p.x, y: o.y + p.y }))
         return distanceToPolyline(local, abs, false) <= padding + o.strokeWidth
       }
+      case 'path': {
+        const center = objectCenter(o)
+        const local = rotatePoint(worldPt, center, -o.rotation)
+        if (o.pathSubpaths) {
+          const absLoops = o.pathSubpaths.map((loop) => loop.map((p) => ({ x: o.x + p.x, y: o.y + p.y })))
+          if (pointInMultiPolygon(local, absLoops)) return true
+          return absLoops.some((loop) => distanceToPolyline(local, loop, true) <= padding)
+        }
+        if (!o.pathVertices || o.pathVertices.length < 2) return false
+        const flat: Point[] = []
+        const segmentCount = o.pathClosed ? o.pathVertices.length : o.pathVertices.length - 1
+        for (let i = 0; i < segmentCount; i++) {
+          const a = o.pathVertices[i]
+          const b = o.pathVertices[(i + 1) % o.pathVertices.length]
+          const c1 = a.handleOut ?? a
+          const c2 = b.handleIn ?? b
+          flat.push(...flattenCubicBezier(a, c1, c2, b, 8))
+        }
+        const abs = flat.map((p) => ({ x: o.x + p.x, y: o.y + p.y }))
+        if (o.pathClosed && pointInPolygon(local, abs)) return true
+        return distanceToPolyline(local, abs, o.pathClosed ?? false) <= padding + o.strokeWidth
+      }
       default:
         return pointInRotatedRect(worldPt, o, padding)
     }
@@ -1189,12 +1928,12 @@ export class CanvasEngine {
     return this.doc.settings.snapToGrid ? snapPoint(pt, this.doc.settings.gridSize) : pt
   }
 
-  private isTwoPointTool(tool: CanvasToolId): tool is 'rectangle' | 'square' | 'circle' | 'line' | 'arc' {
-    return tool === 'rectangle' || tool === 'square' || tool === 'circle' || tool === 'line' || tool === 'arc'
+  private isTwoPointTool(tool: CanvasToolId): tool is 'rectangle' | 'square' | 'circle' | 'line' | 'arc' | 'semicircle' {
+    return tool === 'rectangle' || tool === 'square' || tool === 'circle' || tool === 'line' || tool === 'arc' || tool === 'semicircle'
   }
 
-  private isTwoPointObjectType(type: CanvasObjectType): boolean {
-    return type === 'rectangle' || type === 'square' || type === 'circle' || type === 'line' || type === 'arc'
+  private isTwoPointObjectType(type: CanvasObjectType | 'semicircle'): boolean {
+    return type === 'rectangle' || type === 'square' || type === 'circle' || type === 'line' || type === 'arc' || type === 'semicircle'
   }
 
   pointerDown(screenPt: Point, opts: { shiftKey?: boolean } = {}) {
@@ -1203,6 +1942,32 @@ export class CanvasEngine {
 
     if (this.spacePanOverride || this.tool === 'pan') {
       this.drag = { kind: 'pan', startWorld: screenPt, currentWorld: screenPt, before: [], initial: new Map() }
+      return
+    }
+
+    if (this.pendingLeaderTextId) {
+      const textId = this.pendingLeaderTextId
+      this.pendingLeaderTextId = null
+      const before = this.snapshot()
+      this.doc = { ...this.doc, objects: this.doc.objects.map((o) => (o.id === textId ? { ...o, calloutTarget: { x: worldRaw.x, y: worldRaw.y } } : o)) }
+      this.commit(before)
+      this.notify()
+      this.scheduleRender()
+      return
+    }
+
+    // V3C Pen tool path-edit mode — takes priority over the normal
+    // select/pen dispatch below while a path is being edited, but only
+    // consumes the click when it actually hits a handle or (with Pen
+    // active) lands on the path itself to insert a new anchor. Anything
+    // else falls through to the ordinary tool logic, which naturally exits
+    // edit mode by clicking elsewhere.
+    if (this.editingPathId && (this.tool === 'select' || this.tool === 'pen')) {
+      if (this.pointerDownPathEdit(screenPt, worldRaw)) return
+    }
+
+    if (this.tool === 'pen') {
+      this.pointerDownPen(screenPt, worldRaw)
       return
     }
 
@@ -1228,6 +1993,16 @@ export class CanvasEngine {
 
     if (this.tool === 'eyedropper') {
       this.pickColorAt(worldRaw)
+      return
+    }
+
+    if (this.tool === 'trim') {
+      this.pointerDownTrim(worldRaw)
+      return
+    }
+
+    if (this.tool === 'extend') {
+      this.pointerDownExtend(worldRaw)
       return
     }
 
@@ -1348,6 +2123,24 @@ export class CanvasEngine {
   }
 
   pointerMove(screenPt: Point) {
+    if (this.penDrag) {
+      this.pointerMovePenDrag(screenPt)
+      return
+    }
+
+    if (this.penDraft) {
+      const worldRaw = this.screenToWorld(screenPt)
+      this.penHoverPoint = worldRaw
+      if (this.penActiveVertexIndex !== null && this.penDownScreen && distance(screenPt, this.penDownScreen) > CLICK_DRAG_THRESHOLD) {
+        const vertex = this.penDraft[this.penActiveVertexIndex]
+        vertex.handleOut = { x: worldRaw.x, y: worldRaw.y }
+        vertex.handleIn = { x: 2 * vertex.x - worldRaw.x, y: 2 * vertex.y - worldRaw.y }
+        vertex.smooth = true
+      }
+      this.scheduleRender()
+      return
+    }
+
     if (this.measureDraft) {
       this.measureDraft.current = this.screenToWorld(screenPt)
       this.scheduleRender()
@@ -1494,6 +2287,19 @@ export class CanvasEngine {
   }
 
   pointerUp(screenPt?: Point) {
+    if (this.penDrag) {
+      this.commit(this.penDragBefore ?? this.snapshot())
+      this.penDrag = null
+      this.penDragBefore = null
+      this.notify()
+      this.scheduleRender()
+      return
+    }
+    if (this.penActiveVertexIndex !== null) {
+      this.penActiveVertexIndex = null
+      return
+    }
+
     if (this.measureDraft) {
       const { start: a, current: b } = this.measureDraft
       this.measureDraft = null
@@ -1602,6 +2408,18 @@ export class CanvasEngine {
       obj = this.baseObject('circle', atWorld.x - size / 2, atWorld.y - size / 2, size, size)
       obj.fill = spec.fill
       obj.stroke = spec.stroke
+    } else if (spec.type === 'semicircle') {
+      const diameter = Math.max(spec.diameter, MIN_SIZE)
+      const radius = diameter / 2
+      obj = this.baseObject('arc', atWorld.x - radius, atWorld.y - radius, diameter, radius)
+      obj.points = [
+        { x: 0, y: radius },
+        { x: diameter, y: radius },
+      ]
+      obj.arcBulge = 1
+      obj.closed = true
+      obj.fill = spec.fill
+      obj.stroke = spec.stroke
     } else {
       const length = Math.max(spec.length, 1)
       const rad = degToRadLocal(spec.angleDeg)
@@ -1664,6 +2482,30 @@ export class CanvasEngine {
       obj = this.baseObject('arc', draft.start.x + padded.x, draft.start.y + padded.y, Math.max(padded.width, 1), Math.max(padded.height, 1))
       obj.points = [{ x: -padded.x, y: -padded.y }, { x: p2.x - padded.x, y: p2.y - padded.y }]
       obj.arcBulge = 0.5
+    } else if (draft.type === 'semicircle') {
+      // V3C dedicated Semicircle tool — drag defines the diameter directly
+      // (like Line), rather than a bounding box (like Circle); the bulge is
+      // fixed at exactly 1 (a true 180° half-circle). The bounding box is
+      // computed by sampling the actual rendered arc rather than derived
+      // algebraically, so it can't drift out of sync with drawObject's arc
+      // rendering if that ever changes.
+      const p1 = { x: 0, y: 0 }
+      const p2 = { x: draft.current.x - draft.start.x, y: draft.current.y - draft.start.y }
+      if (distance(p1, p2) < MIN_SIZE && !force) return
+      const arc = arcFromBulge(p1, p2, 1)
+      const samplePts = [p1, p2]
+      if (arc) {
+        const sweep = arc.ccw ? -Math.PI : Math.PI
+        for (let i = 0; i <= 16; i++) {
+          const t = arc.startAngle + (sweep * i) / 16
+          samplePts.push({ x: arc.center.x + Math.cos(t) * arc.radius, y: arc.center.y + Math.sin(t) * arc.radius })
+        }
+      }
+      const bounds = boundsOfPoints(samplePts)
+      obj = this.baseObject('arc', draft.start.x + bounds.x, draft.start.y + bounds.y, Math.max(bounds.width, 1), Math.max(bounds.height, 1))
+      obj.points = [{ x: p1.x - bounds.x, y: p1.y - bounds.y }, { x: p2.x - bounds.x, y: p2.y - bounds.y }]
+      obj.arcBulge = 1
+      obj.closed = true
     } else if (draft.type === 'polygon') {
       if (draft.points.length < 3) return
       const bounds = boundsOfPoints(draft.points)
@@ -1718,6 +2560,7 @@ export class CanvasEngine {
 
     if (this.doc.settings.showGrid) this.drawGrid(ctx)
     this.drawObjects(ctx)
+    this.drawCallouts(ctx)
     this.drawDraft(ctx)
 
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0)
@@ -1728,6 +2571,8 @@ export class CanvasEngine {
     this.drawAlignmentGuides(ctx)
     this.drawMarquee(ctx)
     this.drawLasso(ctx)
+    this.drawPenDraft(ctx)
+    this.drawPathEditOverlay(ctx)
   }
 
   /** A small screen-space pill label anchored near `worldAnchor`, offset toward screen bottom-right. */
@@ -1802,7 +2647,7 @@ export class CanvasEngine {
     ctx.restore()
 
     const midScreen = { x: (sa.x + sb.x) / 2, y: (sa.y + sb.y) / 2 }
-    this.drawCenteredScreenPill(ctx, formatDimension(distance(a, b), unit), midScreen, MEASURE_COLOR, '#ffffff')
+    this.drawCenteredScreenPill(ctx, formatLength(distance(a, b), unit), midScreen, MEASURE_COLOR, '#ffffff')
 
     // Horizontal/vertical legs "where useful" — skip when the segment is already
     // purely horizontal or vertical (the main label already covers that case).
@@ -1821,8 +2666,8 @@ export class CanvasEngine {
       ctx.lineTo(sb.x, sb.y)
       ctx.stroke()
       ctx.restore()
-      this.drawCenteredScreenPill(ctx, formatDimension(dxWorld, unit), { x: (sa.x + corner.x) / 2, y: corner.y }, 'rgba(47, 111, 237, 0.75)', '#ffffff')
-      this.drawCenteredScreenPill(ctx, formatDimension(dyWorld, unit), { x: corner.x, y: (corner.y + sb.y) / 2 }, 'rgba(47, 111, 237, 0.75)', '#ffffff')
+      this.drawCenteredScreenPill(ctx, formatLength(dxWorld, unit), { x: (sa.x + corner.x) / 2, y: corner.y }, 'rgba(47, 111, 237, 0.75)', '#ffffff')
+      this.drawCenteredScreenPill(ctx, formatLength(dyWorld, unit), { x: corner.x, y: (corner.y + sb.y) / 2 }, 'rgba(47, 111, 237, 0.75)', '#ffffff')
     }
   }
 
@@ -1861,15 +2706,17 @@ export class CanvasEngine {
     if (draft.type === 'rectangle') {
       const w = Math.abs(draft.current.x - draft.start.x)
       const h = Math.abs(draft.current.y - draft.start.y)
-      text = formatDimensionPair(w, h, unit)
+      text = formatLengthPair(w, h, unit)
     } else if (draft.type === 'square') {
       const size = Math.max(Math.abs(draft.current.x - draft.start.x), Math.abs(draft.current.y - draft.start.y))
-      text = formatDimension(size, unit)
+      text = formatLength(size, unit)
     } else if (draft.type === 'circle') {
       const size = Math.max(Math.abs(draft.current.x - draft.start.x), Math.abs(draft.current.y - draft.start.y))
-      text = `Ø${formatDimensionValue(size, unit)} ${unitSuffix(unit)}`
+      text = prefixedLength('Ø', size, unit)
     } else if (draft.type === 'line') {
-      text = formatDimension(distance(draft.start, draft.current), unit)
+      text = formatLength(distance(draft.start, draft.current), unit)
+    } else if (draft.type === 'semicircle') {
+      text = prefixedLength('Ø', distance(draft.start, draft.current), unit)
     }
     if (!text) return
     this.drawLabelPill(ctx, text, draft.current)
@@ -1890,20 +2737,20 @@ export class CanvasEngine {
       let anchorWorld: Point
 
       if (o.type === 'rectangle' || o.type === 'square') {
-        text = o.type === 'square' ? formatDimension(o.width, unit) : formatDimensionPair(o.width, o.height, unit)
+        text = o.type === 'square' ? formatLength(o.width, unit) : formatLengthPair(o.width, o.height, unit)
         anchorWorld = rotatePoint({ x: o.x + o.width, y: o.y + o.height }, objectCenter(o), o.rotation)
       } else if (o.type === 'circle') {
-        text = `Ø${formatDimensionValue(o.width, unit)} ${unitSuffix(unit)}`
+        text = prefixedLength('Ø', o.width, unit)
         anchorWorld = rotatePoint({ x: o.x + o.width, y: o.y + o.height }, objectCenter(o), o.rotation)
       } else if (o.type === 'line' && o.points && o.points.length >= 2) {
         const [p1, p2] = o.points
-        text = formatDimension(distance(p1, p2), unit)
+        text = formatLength(distance(p1, p2), unit)
         anchorWorld = { x: o.x + Math.max(p1.x, p2.x), y: o.y + Math.max(p1.y, p2.y) }
       } else if (o.type === 'arc' && o.points && o.points.length >= 2) {
         const [p1, p2] = o.points
         const arc = arcFromBulge(p1, p2, o.arcBulge ?? 0.5)
         if (arc) {
-          text = `R${formatDimensionValue(arc.radius, unit)} ${unitSuffix(unit)}`
+          text = prefixedLength('R', arc.radius, unit)
           anchorWorld = { x: o.x + Math.max(p1.x, p2.x), y: o.y + Math.max(p1.y, p2.y) }
         } else {
           continue
@@ -1958,6 +2805,29 @@ export class CanvasEngine {
     }
   }
 
+  /** V3C text leader/callout lines — drawn in world space, a thin line from each text box's edge to its target point. */
+  private drawCallouts(ctx: CanvasRenderingContext2D) {
+    for (const o of this.doc.objects) {
+      if (o.type !== 'text' || !o.calloutTarget || !o.visible) continue
+      const center = objectCenter(o)
+      const edgePoint = rotatePoint({ x: o.calloutTarget.x < center.x ? o.x : o.x + o.width, y: center.y }, center, o.rotation)
+      ctx.save()
+      ctx.strokeStyle = o.stroke
+      ctx.lineWidth = 1
+      ctx.setLineDash([4, 3])
+      ctx.beginPath()
+      ctx.moveTo(edgePoint.x, edgePoint.y)
+      ctx.lineTo(o.calloutTarget.x, o.calloutTarget.y)
+      ctx.stroke()
+      ctx.setLineDash([])
+      ctx.fillStyle = o.stroke
+      ctx.beginPath()
+      ctx.arc(o.calloutTarget.x, o.calloutTarget.y, 3, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.restore()
+    }
+  }
+
   private drawObject(ctx: CanvasRenderingContext2D, o: CanvasObject) {
     const center = objectCenter(o)
     ctx.save()
@@ -1978,7 +2848,16 @@ export class CanvasEngine {
       case 'rectangle':
       case 'square':
         ctx.beginPath()
-        if (o.cornerRadius && o.cornerRadius > 0) {
+        if (o.cornerRadii) {
+          const maxR = Math.min(hw, hh)
+          const radii: [number, number, number, number] = [
+            clamp(o.cornerRadii.topLeft ?? 0, 0, maxR),
+            clamp(o.cornerRadii.topRight ?? 0, 0, maxR),
+            clamp(o.cornerRadii.bottomRight ?? 0, 0, maxR),
+            clamp(o.cornerRadii.bottomLeft ?? 0, 0, maxR),
+          ]
+          ctx.roundRect(-hw, -hh, o.width, o.height, radii)
+        } else if (o.cornerRadius && o.cornerRadius > 0) {
           const r = Math.min(o.cornerRadius, hw, hh)
           ctx.roundRect(-hw, -hh, o.width, o.height, r)
         } else {
@@ -2037,7 +2916,27 @@ export class CanvasEngine {
           ctx.moveTo(p1.x, p1.y)
           ctx.lineTo(p2.x, p2.y)
         }
+        // V3C — a closed arc (Semicircle, or any arc the designer closes)
+        // fills the pie/chord area bounded by the curve and the p1-p2
+        // chord, useful for arches, niches and rounded details.
+        if (o.closed) {
+          ctx.closePath()
+          this.paintClosedFill(ctx, o, hw, hh)
+        }
         if (o.strokeEnabled) ctx.stroke()
+        break
+      }
+      case 'path': {
+        this.buildPathGeometry(ctx, o, local)
+        if (o.pathSubpaths) {
+          this.paintClosedFill(ctx, o, hw, hh, 'evenodd')
+          if (o.strokeEnabled) ctx.stroke()
+        } else if (o.pathClosed) {
+          this.paintClosedFill(ctx, o, hw, hh)
+          if (o.strokeEnabled) ctx.stroke()
+        } else if (o.strokeEnabled) {
+          ctx.stroke()
+        }
         break
       }
       case 'dimension': {
@@ -2054,7 +2953,7 @@ export class CanvasEngine {
         ctx.moveTo(p1.x, p1.y)
         ctx.lineTo(p2.x, p2.y)
         ctx.stroke()
-        const label = o.dimensionLabel ?? formatDimension(o.dimensionValue ?? distance(p1, p2), this.doc.settings.unit)
+        const label = o.dimensionLabel ?? formatLength(o.dimensionValue ?? distance(p1, p2), this.doc.settings.unit)
         const mid = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 }
         ctx.save()
         ctx.translate(mid.x, mid.y)
@@ -2068,12 +2967,20 @@ export class CanvasEngine {
         break
       }
       case 'text': {
+        const fontSize = o.fontSize ?? 32
+        const bold = o.fontWeight === 'bold'
+        if (o.textBackground && o.textBackground !== 'none') {
+          ctx.fillStyle = o.textBackground
+          ctx.fillRect(-hw, -hh, o.width, o.height)
+        }
         ctx.fillStyle = o.fill
-        ctx.font = `${o.fontSize ?? 32}px Manrope, sans-serif`
+        ctx.font = `${bold ? '700' : '400'} ${fontSize}px Manrope, sans-serif`
         ctx.textAlign = o.textAlign ?? 'left'
         ctx.textBaseline = 'top'
         const tx = o.textAlign === 'center' ? 0 : o.textAlign === 'right' ? hw : -hw
-        ctx.fillText(o.text ?? '', tx, -hh)
+        const lines = o.textBoxWidth ? wrapText(ctx, o.text ?? '', fontSize, o.textBoxWidth, bold) : [o.text ?? '']
+        const lineHeight = fontSize * 1.3
+        lines.forEach((line, i) => ctx.fillText(line, tx, -hh + i * lineHeight))
         break
       }
       default:
@@ -2086,17 +2993,52 @@ export class CanvasEngine {
   }
 
   /**
+   * Builds the Path2D-equivalent geometry for a 'path' object onto `ctx`
+   * (caller then fills/strokes it) — either the Pen tool's Bézier vertices,
+   * or a Boolean-op result's straight-edged subpath loops. `local` converts
+   * an object-local point into the already-translated/rotated draw space.
+   */
+  private buildPathGeometry(ctx: CanvasRenderingContext2D, o: CanvasObject, local: (p: Point) => Point) {
+    ctx.beginPath()
+    if (o.pathSubpaths) {
+      for (const subpath of o.pathSubpaths) {
+        if (subpath.length < 2) continue
+        const pts = subpath.map(local)
+        ctx.moveTo(pts[0].x, pts[0].y)
+        for (const p of pts.slice(1)) ctx.lineTo(p.x, p.y)
+        ctx.closePath()
+      }
+      return
+    }
+    const vertices = o.pathVertices
+    if (!vertices || vertices.length < 2) return
+    const pts = vertices.map((v) => ({
+      anchor: local(v),
+      handleIn: v.handleIn ? local(v.handleIn) : local(v),
+      handleOut: v.handleOut ? local(v.handleOut) : local(v),
+    }))
+    ctx.moveTo(pts[0].anchor.x, pts[0].anchor.y)
+    const segmentCount = o.pathClosed ? pts.length : pts.length - 1
+    for (let i = 0; i < segmentCount; i++) {
+      const a = pts[i]
+      const b = pts[(i + 1) % pts.length]
+      ctx.bezierCurveTo(a.handleOut.x, a.handleOut.y, b.handleIn.x, b.handleIn.y, b.anchor.x, b.anchor.y)
+    }
+    if (o.pathClosed) ctx.closePath()
+  }
+
+  /**
    * Paints the fill for a closed shape whose path is already on `ctx`
    * (rect/ellipse/polygon, not yet stroked). Colour fills are unchanged from
    * V1; texture/image fills are painted live every frame from the material
    * catalogue / cached image — the object itself never gets rasterized, it
    * just gets a different paint each render.
    */
-  private paintClosedFill(ctx: CanvasRenderingContext2D, o: CanvasObject, hw: number, hh: number) {
+  private paintClosedFill(ctx: CanvasRenderingContext2D, o: CanvasObject, hw: number, hh: number, fillRule: CanvasFillRule = 'nonzero') {
     if (o.fillType === 'color') {
       if (o.fill !== 'none') {
         ctx.fillStyle = o.fill
-        ctx.fill()
+        ctx.fill(fillRule)
       }
       return
     }
@@ -2113,14 +3055,14 @@ export class CanvasEngine {
         pattern.setTransform(new DOMMatrix([cos * scale, sin * scale, -sin * scale, cos * scale, offset.x, offset.y]))
         ctx.save()
         ctx.fillStyle = pattern
-        ctx.fill()
+        ctx.fill(fillRule)
         ctx.restore()
         return
       }
       // Material removed from the catalogue since this was saved — fall back to its stored flat colour.
       if (o.fill !== 'none') {
         ctx.fillStyle = o.fill
-        ctx.fill()
+        ctx.fill(fillRule)
       }
       return
     }
@@ -2130,12 +3072,12 @@ export class CanvasEngine {
       if (!img) {
         // Still decoding — paint a neutral placeholder and repaint once it's ready.
         ctx.fillStyle = o.fill !== 'none' ? o.fill : '#d8d3c8'
-        ctx.fill()
+        ctx.fill(fillRule)
         onImageReady(o.imageData, () => this.scheduleRender())
         return
       }
       ctx.save()
-      ctx.clip()
+      ctx.clip(fillRule)
       const scale = o.textureScale ?? 1
       const rot = degToRadLocal(o.textureRotation ?? 0)
       const offset = o.textureOffset ?? { x: 0, y: 0 }
@@ -2165,7 +3107,7 @@ export class CanvasEngine {
     // fillType claims texture/image but the underlying data is missing — fall back to the stored colour.
     if (o.fill !== 'none') {
       ctx.fillStyle = o.fill
-      ctx.fill()
+      ctx.fill(fillRule)
     }
   }
 
@@ -2198,7 +3140,7 @@ export class CanvasEngine {
         ctx.ellipse(x + size / 2, y + size / 2, size / 2, size / 2, 0, 0, Math.PI * 2)
         ctx.stroke()
       }
-    } else if (draft.type === 'line' || draft.type === 'arc' || draft.type === 'dimension') {
+    } else if (draft.type === 'line' || draft.type === 'arc' || draft.type === 'dimension' || draft.type === 'semicircle') {
       ctx.beginPath()
       ctx.moveTo(draft.start.x, draft.start.y)
       ctx.lineTo(draft.current.x, draft.current.y)
@@ -2315,6 +3257,97 @@ export class CanvasEngine {
     ctx.stroke()
     ctx.restore()
   }
+
+  /** In-progress Pen path: placed anchors/handles, curve segments so far, and a rubber-band preview to the cursor. */
+  private drawPenDraft(ctx: CanvasRenderingContext2D) {
+    if (!this.penDraft || this.penDraft.length === 0) return
+    const PEN_COLOR = '#2f6fed'
+    const screenPts = this.penDraft.map((v) => ({
+      anchor: this.worldToScreen(v),
+      handleIn: v.handleIn ? this.worldToScreen(v.handleIn) : undefined,
+      handleOut: v.handleOut ? this.worldToScreen(v.handleOut) : undefined,
+    }))
+
+    ctx.save()
+    ctx.strokeStyle = PEN_COLOR
+    ctx.lineWidth = 1.5
+    ctx.beginPath()
+    ctx.moveTo(screenPts[0].anchor.x, screenPts[0].anchor.y)
+    for (let i = 1; i < screenPts.length; i++) {
+      const a = screenPts[i - 1]
+      const b = screenPts[i]
+      ctx.bezierCurveTo(a.handleOut?.x ?? a.anchor.x, a.handleOut?.y ?? a.anchor.y, b.handleIn?.x ?? b.anchor.x, b.handleIn?.y ?? b.anchor.y, b.anchor.x, b.anchor.y)
+    }
+    ctx.stroke()
+
+    // Rubber-band preview to the live cursor position.
+    if (this.penHoverPoint) {
+      const hoverScreen = this.worldToScreen(this.penHoverPoint)
+      const last = screenPts[screenPts.length - 1]
+      ctx.setLineDash([5, 4])
+      ctx.beginPath()
+      ctx.moveTo(last.anchor.x, last.anchor.y)
+      ctx.lineTo(hoverScreen.x, hoverScreen.y)
+      ctx.stroke()
+      ctx.setLineDash([])
+    }
+
+    for (const p of screenPts) {
+      if (p.handleOut) this.drawPenHandleLine(ctx, p.anchor, p.handleOut, PEN_COLOR)
+      if (p.handleIn) this.drawPenHandleLine(ctx, p.anchor, p.handleIn, PEN_COLOR)
+      ctx.fillStyle = '#ffffff'
+      ctx.strokeStyle = PEN_COLOR
+      ctx.beginPath()
+      ctx.rect(p.anchor.x - 4, p.anchor.y - 4, 8, 8)
+      ctx.fill()
+      ctx.stroke()
+    }
+    ctx.restore()
+  }
+
+  private drawPenHandleLine(ctx: CanvasRenderingContext2D, anchor: Point, handle: Point, color: string) {
+    ctx.save()
+    ctx.strokeStyle = color
+    ctx.lineWidth = 1
+    ctx.beginPath()
+    ctx.moveTo(anchor.x, anchor.y)
+    ctx.lineTo(handle.x, handle.y)
+    ctx.stroke()
+    ctx.fillStyle = color
+    ctx.beginPath()
+    ctx.arc(handle.x, handle.y, 3.5, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.restore()
+  }
+
+  /** Vertex-edit-mode overlay for a 'path' object double-clicked with Select — anchors, handles, and their connector lines. */
+  private drawPathEditOverlay(ctx: CanvasRenderingContext2D) {
+    const obj = this.penPathObject()
+    if (!obj || !obj.pathVertices) return
+    const EDIT_COLOR = '#2f6fed'
+    ctx.save()
+    for (let i = 0; i < obj.pathVertices.length; i++) {
+      const v = obj.pathVertices[i]
+      const anchorScreen = this.worldToScreen({ x: obj.x + v.x, y: obj.y + v.y })
+      if (v.handleOut) {
+        const hs = this.worldToScreen({ x: obj.x + v.handleOut.x, y: obj.y + v.handleOut.y })
+        this.drawPenHandleLine(ctx, anchorScreen, hs, EDIT_COLOR)
+      }
+      if (v.handleIn) {
+        const hs = this.worldToScreen({ x: obj.x + v.handleIn.x, y: obj.y + v.handleIn.y })
+        this.drawPenHandleLine(ctx, anchorScreen, hs, EDIT_COLOR)
+      }
+      const selected = i === this.selectedVertexIndex
+      ctx.fillStyle = selected ? EDIT_COLOR : '#ffffff'
+      ctx.strokeStyle = EDIT_COLOR
+      ctx.lineWidth = 1.5
+      ctx.beginPath()
+      ctx.rect(anchorScreen.x - 5, anchorScreen.y - 5, 10, 10)
+      ctx.fill()
+      ctx.stroke()
+    }
+    ctx.restore()
+  }
 }
 
 function degToRadLocal(deg: number): number {
@@ -2333,26 +3366,10 @@ function hexWithAlpha(hex: string, alpha: number): string {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`
 }
 
-export function formatDimension(mm: number, unit: CanvasUnit): string {
-  if (unit === 'mm') return `${Math.round(mm)} mm`
-  if (unit === 'cm') return `${(mm / 10).toFixed(1)} cm`
-  return `${(mm / 1000).toFixed(2)} m`
-}
-
-/** Same numeric formatting as formatDimension, without the trailing unit — for compact combined labels like "2400 × 750 mm". */
-function formatDimensionValue(mm: number, unit: CanvasUnit): string {
-  if (unit === 'mm') return `${Math.round(mm)}`
-  if (unit === 'cm') return `${(mm / 10).toFixed(1)}`
-  return `${(mm / 1000).toFixed(2)}`
-}
-
-function unitSuffix(unit: CanvasUnit): string {
-  return unit
-}
-
-/** "2400 × 750 mm" — width/height sharing one unit suffix. */
-function formatDimensionPair(wMm: number, hMm: number, unit: CanvasUnit): string {
-  return `${formatDimensionValue(wMm, unit)} × ${formatDimensionValue(hMm, unit)} ${unitSuffix(unit)}`
+/** "Ø2400 mm" / "R1200 mm" style label — `formatLengthValue` is already fully self-contained for ft+in (e.g. `7'10.49"`), so the unit suffix is only appended for the simple units. */
+function prefixedLength(prefix: string, mm: number, unit: CanvasUnit): string {
+  if (unit === 'ftin') return `${prefix}${formatLengthValue(mm, unit)}`
+  return `${prefix}${formatLengthValue(mm, unit)} ${unitSuffix(unit)}`
 }
 
 /** Resizes `init` toward `worldPt` via the given handle, accounting for rotation. */

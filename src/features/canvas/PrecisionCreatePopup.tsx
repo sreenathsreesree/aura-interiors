@@ -1,11 +1,13 @@
 import { useRef, useState, type RefObject } from 'react'
 import { NumberStepper } from '@/components/ui'
-import type { PreciseCreateSpec } from '@/types/canvas'
+import type { CanvasUnit, PreciseCreateSpec } from '@/types/canvas'
 import { AnchoredPopover } from './AnchoredPopover'
 import { ColorPickerContent } from './ColorPicker'
+import { LengthField } from './LengthField'
 
 interface PrecisionCreatePopupProps {
-  tool: 'rectangle' | 'circle' | 'line'
+  tool: 'rectangle' | 'circle' | 'line' | 'semicircle'
+  unit: CanvasUnit
   anchorRef: RefObject<HTMLElement | null>
   defaultFill: string
   defaultStroke: string
@@ -15,11 +17,13 @@ interface PrecisionCreatePopupProps {
 
 /**
  * Compact contextual popup for numeric-precision object creation, opened by
- * double-click/double-tap on the canvas while Rectangle/Circle/Line is the
- * active tool. Deliberately one small popup per tool rather than a single
- * universal settings form.
+ * double-click/double-tap on the canvas while Rectangle/Circle/Line/Semicircle
+ * is the active tool. Deliberately one small popup per tool rather than a
+ * single universal settings form. All length fields go through LengthField,
+ * so entry happens in the project's current unit while geometry is still
+ * created and stored in mm underneath.
  */
-export function PrecisionCreatePopup({ tool, anchorRef, defaultFill, defaultStroke, onCreate, onClose }: PrecisionCreatePopupProps) {
+export function PrecisionCreatePopup({ tool, unit, anchorRef, defaultFill, defaultStroke, onCreate, onClose }: PrecisionCreatePopupProps) {
   const [width, setWidth] = useState(600)
   const [height, setHeight] = useState(400)
   const [cornerRadius, setCornerRadius] = useState(0)
@@ -37,13 +41,15 @@ export function PrecisionCreatePopup({ tool, anchorRef, defaultFill, defaultStro
       onCreate({ type: 'rectangle', width: Math.max(width, 10), height: Math.max(height, 10), cornerRadius: Math.max(cornerRadius, 0), fill, stroke })
     } else if (tool === 'circle') {
       onCreate({ type: 'circle', diameter: Math.max(diameter, 10), fill, stroke })
+    } else if (tool === 'semicircle') {
+      onCreate({ type: 'semicircle', diameter: Math.max(diameter, 10), fill, stroke })
     } else {
       onCreate({ type: 'line', length: Math.max(length, 1), angleDeg, stroke })
     }
     onClose()
   }
 
-  const title = tool === 'rectangle' ? 'Rectangle' : tool === 'circle' ? 'Circle' : 'Line'
+  const title = tool === 'rectangle' ? 'Rectangle' : tool === 'circle' ? 'Circle' : tool === 'semicircle' ? 'Semicircle' : 'Line'
 
   return (
     <AnchoredPopover anchorRef={anchorRef} onClose={onClose}>
@@ -52,17 +58,19 @@ export function PrecisionCreatePopup({ tool, anchorRef, defaultFill, defaultStro
 
         {tool === 'rectangle' && (
           <div className="grid grid-cols-2 gap-2.5">
-            <NumberStepper label="Width (mm)" value={width} onChange={(v) => setWidth(Math.max(10, v))} step={10} />
-            <NumberStepper label="Height (mm)" value={height} onChange={(v) => setHeight(Math.max(10, v))} step={10} />
-            <NumberStepper label="Corner Radius (mm)" value={cornerRadius} onChange={(v) => setCornerRadius(Math.max(0, v))} step={5} className="col-span-2" />
+            <LengthField label="Width" unit={unit} valueMm={width} onChangeMm={(v) => setWidth(Math.max(10, v))} />
+            <LengthField label="Height" unit={unit} valueMm={height} onChangeMm={(v) => setHeight(Math.max(10, v))} />
+            <LengthField label="Corner Radius" unit={unit} valueMm={cornerRadius} onChangeMm={(v) => setCornerRadius(Math.max(0, v))} className="col-span-2" />
           </div>
         )}
 
-        {tool === 'circle' && <NumberStepper label="Diameter (mm)" value={diameter} onChange={(v) => setDiameter(Math.max(10, v))} step={10} />}
+        {tool === 'circle' && <LengthField label="Diameter" unit={unit} valueMm={diameter} onChangeMm={(v) => setDiameter(Math.max(10, v))} />}
+
+        {tool === 'semicircle' && <LengthField label="Diameter" unit={unit} valueMm={diameter} onChangeMm={(v) => setDiameter(Math.max(10, v))} />}
 
         {tool === 'line' && (
           <div className="grid grid-cols-2 gap-2.5">
-            <NumberStepper label="Length (mm)" value={length} onChange={(v) => setLength(Math.max(1, v))} step={10} />
+            <LengthField label="Length" unit={unit} valueMm={length} onChangeMm={(v) => setLength(Math.max(1, v))} />
             <NumberStepper label="Angle °" value={angleDeg} onChange={(v) => setAngleDeg(((v % 360) + 360) % 360)} step={15} />
           </div>
         )}
