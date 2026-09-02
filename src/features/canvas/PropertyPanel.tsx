@@ -65,6 +65,15 @@ export function PropertyPanel({ engine, snapshot, className }: Props) {
                   step={15}
                   className="col-span-2"
                 />
+                {(single.type === 'rectangle' || single.type === 'square') && (
+                  <NumberStepper
+                    label="Corner Radius (mm)"
+                    value={Math.round(single.cornerRadius ?? 0)}
+                    onChange={(v) => engine.updateSelectedProps({ cornerRadius: Math.max(0, v) })}
+                    step={5}
+                    className="col-span-2"
+                  />
+                )}
                 {single.type === 'arc' && (
                   <NumberStepper
                     label="Curve"

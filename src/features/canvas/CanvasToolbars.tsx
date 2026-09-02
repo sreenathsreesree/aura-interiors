@@ -5,8 +5,10 @@ import {
   Copy,
   ClipboardPaste,
   CopyPlus,
+  Crosshair,
   Download,
   FlipHorizontal,
+  Focus,
   Grid3x3,
   Group,
   Hand,
@@ -21,8 +23,8 @@ import {
   PenTool,
   Pipette,
   Redo2,
-  RotateCw,
   Ruler,
+  RotateCw,
   Save,
   Scan,
   Spline,
@@ -120,6 +122,7 @@ export const DRAW_TOOLS: { id: CanvasToolId; icon: React.ReactNode; label: strin
   { id: 'freeDraw', icon: <PenTool className="h-5 w-5" />, label: 'Free Draw' },
   { id: 'text', icon: <Type className="h-5 w-5" />, label: 'Text' },
   { id: 'dimension', icon: <Ruler className="h-5 w-5" />, label: 'Dimension' },
+  { id: 'measure', icon: <Crosshair className="h-5 w-5" />, label: 'Measure' },
 ]
 
 // ------------------------------------------------------------- Left Toolbar
@@ -229,14 +232,16 @@ export function CanvasBottomBar({ engine, snapshot }: EngineProps) {
         {snapshot.zoomPercent}%
       </span>
       <ToolButton icon={<ZoomIn className="h-4 w-4" />} label="Zoom In" onClick={() => engine.zoomIn()} />
-      <ToolButton icon={<Maximize className="h-4 w-4" />} label="Fit to Content" onClick={() => engine.fitToContent()} />
-      <ToolButton icon={<Scan className="h-4 w-4" />} label="Reset Zoom" onClick={() => engine.resetZoom()} />
+      <ToolButton icon={<Maximize className="h-4 w-4" />} label="Fit Drawing" onClick={() => engine.fitToContent()} />
+      <ToolButton icon={<Focus className="h-4 w-4" />} label="Fit Selection" disabled={snapshot.selection.length === 0} onClick={() => engine.fitToSelection()} />
+      <ToolButton icon={<Scan className="h-4 w-4" />} label="Reset to 100%" onClick={() => engine.resetZoom()} />
 
       <div className="mx-1 h-6 w-px shrink-0 bg-white/10" />
 
       <ChipToggle label="Grid" active={snapshot.settings.showGrid} icon={<Grid3x3 className="h-4 w-4" />} onClick={() => engine.toggleGrid()} />
       <ChipToggle label="Snap" active={snapshot.settings.snapToGrid} icon={<Magnet className="h-4 w-4" />} onClick={() => engine.toggleSnap()} />
       <ChipToggle label="Ortho" active={snapshot.settings.ortho} onClick={() => engine.toggleOrtho()} />
+      <ChipToggle label="Dimensions" active={snapshot.settings.showDimensions ?? true} icon={<Ruler className="h-4 w-4" />} onClick={() => engine.toggleShowDimensions()} />
 
       <div className="mx-1 h-6 w-px shrink-0 bg-white/10" />
 

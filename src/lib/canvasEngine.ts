@@ -5,6 +5,7 @@ import {
   distance,
   distanceToPolyline,
   objectCenter,
+  objectSnapPoints,
   orthoConstrain,
   pointInCircle,
   pointInPolygon,
@@ -23,6 +24,7 @@ import type {
   CanvasUnit,
   FillFit,
   Point,
+  PreciseCreateSpec,
 } from '@/types/canvas'
 import { CLOSED_SHAPE_TYPES } from '@/types/canvas'
 import type { Material } from '@/types/materials'
@@ -126,6 +128,8 @@ export class CanvasEngine {
   private doc: CanvasDocument
   private selection: string[] = []
   private tool: CanvasToolId = 'select'
+  /** Desktop "hold Space to pan" — a temporary override that doesn't touch `tool`, so releasing Space resumes whatever was active. */
+  private spacePanOverride = false
 
   private past: CanvasObject[][] = []
   private future: CanvasObject[][] = []
@@ -133,6 +137,12 @@ export class CanvasEngine {
   private drag: DragState | null = null
   private draft: DraftState | null = null
   private marqueeRect: { x: number; y: number; width: number; height: number } | null = null
+
+  /** V3A Measure tool — always ephemeral: never written to doc.objects or undo history. */
+  private measureDraft: { start: Point; current: Point } | null = null
+  private lastMeasurement: { a: Point; b: Point; distance: number; dx: number; dy: number } | null = null
+  /** V3A smart alignment guides — world-space x/y lines to draw while a move-drag is snapped to another object. */
+  private alignmentGuides: { x?: number; y?: number } = {}
 
   private activeFill = '#c9a15f'
   private activeStroke = '#221f1b'
@@ -315,34 +325,41 @@ export class CanvasEngine {
     this.scheduleRender()
   }
 
+  /**
+   * "Reset to 100%" — zoom is a pure viewport transform, so 100% means
+   * exactly 1 screen px per document mm (`viewport.zoom = 1`), never a
+   * change to any object's stored geometry. Keeps whatever world point is
+   * currently centred on screen anchored there, rather than jumping the
+   * view back to the document origin.
+   */
   resetZoom() {
-    this.viewport.zoom = DEFAULT_ZOOM
-    this.viewport.offsetX = this.cssWidth / 2
-    this.viewport.offsetY = this.cssHeight / 2
+    const screenCenter = { x: this.cssWidth / 2, y: this.cssHeight / 2 }
+    const worldCenter = this.screenToWorld(screenCenter)
+    this.viewport.zoom = 1
+    this.viewport.offsetX = screenCenter.x - worldCenter.x
+    this.viewport.offsetY = screenCenter.y - worldCenter.y
     this.notify()
     this.scheduleRender()
   }
 
-  fitToContent() {
-    const objs = this.doc.objects
-    let bounds: { x: number; y: number; width: number; height: number }
-    if (objs.length === 0) {
-      bounds = { x: 0, y: 0, width: 4000, height: 3500 }
-    } else {
-      let minX = Infinity
-      let minY = Infinity
-      let maxX = -Infinity
-      let maxY = -Infinity
-      for (const o of objs) {
-        for (const c of rotatedCorners(o)) {
-          minX = Math.min(minX, c.x)
-          minY = Math.min(minY, c.y)
-          maxX = Math.max(maxX, c.x)
-          maxY = Math.max(maxY, c.y)
-        }
+  private static boundsOfObjects(objs: CanvasObject[]): { x: number; y: number; width: number; height: number } {
+    if (objs.length === 0) return { x: 0, y: 0, width: 4000, height: 3500 }
+    let minX = Infinity
+    let minY = Infinity
+    let maxX = -Infinity
+    let maxY = -Infinity
+    for (const o of objs) {
+      for (const c of rotatedCorners(o)) {
+        minX = Math.min(minX, c.x)
+        minY = Math.min(minY, c.y)
+        maxX = Math.max(maxX, c.x)
+        maxY = Math.max(maxY, c.y)
       }
-      bounds = { x: minX, y: minY, width: maxX - minX, height: maxY - minY }
     }
+    return { x: minX, y: minY, width: maxX - minX, height: maxY - minY }
+  }
+
+  private fitToBounds(bounds: { x: number; y: number; width: number; height: number }) {
     const padding = 80
     const availW = Math.max(this.cssWidth - padding * 2, 100)
     const availH = Math.max(this.cssHeight - padding * 2, 100)
@@ -355,11 +372,41 @@ export class CanvasEngine {
     this.scheduleRender()
   }
 
+  /** "Fit Drawing" — frames every object in the document. */
+  fitToContent() {
+    this.fitToBounds(CanvasEngine.boundsOfObjects(this.doc.objects))
+  }
+
+  /** "Fit Selection" — frames just the selected objects; falls back to Fit Drawing when nothing is selected. */
+  fitToSelection() {
+    const selected = this.doc.objects.filter((o) => this.selection.includes(o.id))
+    if (selected.length === 0) {
+      this.fitToContent()
+      return
+    }
+    this.fitToBounds(CanvasEngine.boundsOfObjects(selected))
+  }
+
+  /** Desktop "hold Space to pan" — call with `true` on keydown and `false` on keyup. */
+  setSpacePanOverride(active: boolean) {
+    this.spacePanOverride = active
+  }
+
   // ---------------------------------------------------------------- tool
   setTool(tool: CanvasToolId) {
     this.cancelDraft()
+    if (tool !== 'measure') this.clearMeasurement()
     this.tool = tool
     if (tool !== 'select') this.selection = []
+    this.notify()
+    this.scheduleRender()
+  }
+
+  /** Dismisses the Measure tool's current/last result (e.g. on Escape) without switching tools. */
+  clearMeasurement() {
+    if (!this.measureDraft && !this.lastMeasurement) return
+    this.measureDraft = null
+    this.lastMeasurement = null
     this.notify()
     this.scheduleRender()
   }
@@ -531,6 +578,13 @@ export class CanvasEngine {
   toggleOrtho() {
     this.doc = { ...this.doc, settings: { ...this.doc.settings, ortho: !this.doc.settings.ortho } }
     this.notify()
+  }
+
+  /** Purely a render toggle — never touches object geometry or the manual Dimension tool's persisted objects. */
+  toggleShowDimensions() {
+    this.doc = { ...this.doc, settings: { ...this.doc.settings, showDimensions: !(this.doc.settings.showDimensions ?? true) } }
+    this.notify()
+    this.scheduleRender()
   }
 
   setGridSize(size: number) {
@@ -870,6 +924,7 @@ export class CanvasEngine {
     this.drag = null
     this.draft = null
     this.marqueeRect = null
+    this.alignmentGuides = {}
     this.scheduleRender()
   }
 
@@ -943,8 +998,15 @@ export class CanvasEngine {
     const worldRaw = this.screenToWorld(screenPt)
     const world = this.maybeSnap(worldRaw)
 
-    if (this.tool === 'pan') {
+    if (this.spacePanOverride || this.tool === 'pan') {
       this.drag = { kind: 'pan', startWorld: screenPt, currentWorld: screenPt, before: [], initial: new Map() }
+      return
+    }
+
+    if (this.tool === 'measure') {
+      this.measureDraft = { start: worldRaw, current: worldRaw }
+      this.lastMeasurement = null
+      this.notify()
       return
     }
 
@@ -1065,6 +1127,12 @@ export class CanvasEngine {
   }
 
   pointerMove(screenPt: Point) {
+    if (this.measureDraft) {
+      this.measureDraft.current = this.screenToWorld(screenPt)
+      this.scheduleRender()
+      return
+    }
+
     if (this.draft) {
       const worldRaw = this.screenToWorld(screenPt)
       let world = this.maybeSnap(worldRaw)
@@ -1106,8 +1174,55 @@ export class CanvasEngine {
     }
 
     if (this.drag.kind === 'move') {
-      const dx = world.x - this.drag.startWorld.x
-      const dy = world.y - this.drag.startWorld.y
+      let dx = world.x - this.drag.startWorld.x
+      let dy = world.y - this.drag.startWorld.y
+      this.alignmentGuides = {}
+
+      // Smart snap to other objects' edges/centres — reuses the existing Snap
+      // toggle rather than adding a second one. Only the primary (first)
+      // selected object drives the match; the whole group still moves by the
+      // one resulting dx/dy so it stays rigid.
+      if (this.doc.settings.snapToGrid) {
+        const primaryInit = this.drag.initial.get(this.selection[0])
+        if (primaryInit) {
+          const moved = objectSnapPoints({ ...primaryInit, x: primaryInit.x + dx, y: primaryInit.y + dy })
+          const threshold = 8 / this.viewport.zoom
+          let bestXDist = threshold
+          let bestYDist = threshold
+          let snappedX: number | undefined
+          let snappedY: number | undefined
+          let deltaX = 0
+          let deltaY = 0
+          for (const other of this.doc.objects) {
+            if (this.drag.initial.has(other.id) || !other.visible) continue
+            const cand = objectSnapPoints(other)
+            for (const mx of moved.xs) {
+              for (const ox of cand.xs) {
+                const d = Math.abs(mx - ox)
+                if (d < bestXDist) {
+                  bestXDist = d
+                  deltaX = ox - mx
+                  snappedX = ox
+                }
+              }
+            }
+            for (const my of moved.ys) {
+              for (const oy of cand.ys) {
+                const d = Math.abs(my - oy)
+                if (d < bestYDist) {
+                  bestYDist = d
+                  deltaY = oy - my
+                  snappedY = oy
+                }
+              }
+            }
+          }
+          dx += deltaX
+          dy += deltaY
+          this.alignmentGuides = { x: snappedX, y: snappedY }
+        }
+      }
+
       this.doc = {
         ...this.doc,
         objects: this.doc.objects.map((o) => {
@@ -1148,6 +1263,18 @@ export class CanvasEngine {
   }
 
   pointerUp(screenPt?: Point) {
+    if (this.measureDraft) {
+      const { start: a, current: b } = this.measureDraft
+      this.measureDraft = null
+      // A tap with no real drag isn't a measurement — just clears the crosshair, matching a mis-tap.
+      if (distance(a, b) > 2) {
+        this.lastMeasurement = { a, b, distance: distance(a, b), dx: Math.abs(b.x - a.x), dy: Math.abs(b.y - a.y) }
+      }
+      this.notify()
+      this.scheduleRender()
+      return
+    }
+
     if (this.draft && this.draft.type !== 'polygon' && this.draft.type !== 'dimension') {
       const isTwoPoint = this.isTwoPointObjectType(this.draft.type)
       const draggedEnough = !screenPt || distance(this.draft.startScreen, screenPt) > CLICK_DRAG_THRESHOLD
@@ -1178,6 +1305,7 @@ export class CanvasEngine {
     } else if (this.drag && (this.drag.kind === 'move' || this.drag.kind === 'resize' || this.drag.kind === 'rotate')) {
       this.commit(this.drag.before)
     }
+    if (this.drag?.kind === 'move') this.alignmentGuides = {}
     this.drag = null
     this.notify()
     this.scheduleRender()
@@ -1202,6 +1330,52 @@ export class CanvasEngine {
       locked: false,
       visible: true,
     }
+  }
+
+  /**
+   * V3A precision creation — builds a rectangle/circle/line directly from
+   * typed numeric fields (the double-click popup), centred on `atWorld`
+   * rather than dragged. Goes through the same selection/undo/tool-revert
+   * path as a normal drag-committed object.
+   */
+  createPreciseObject(spec: PreciseCreateSpec, atWorld: Point) {
+    const before = this.snapshot()
+    let obj: CanvasObject
+
+    if (spec.type === 'rectangle') {
+      const width = Math.max(spec.width, MIN_SIZE)
+      const height = Math.max(spec.height, MIN_SIZE)
+      obj = this.baseObject('rectangle', atWorld.x - width / 2, atWorld.y - height / 2, width, height)
+      obj.fill = spec.fill
+      obj.stroke = spec.stroke
+      if (spec.cornerRadius > 0) obj.cornerRadius = spec.cornerRadius
+    } else if (spec.type === 'circle') {
+      const size = Math.max(spec.diameter, MIN_SIZE)
+      obj = this.baseObject('circle', atWorld.x - size / 2, atWorld.y - size / 2, size, size)
+      obj.fill = spec.fill
+      obj.stroke = spec.stroke
+    } else {
+      const length = Math.max(spec.length, 1)
+      const rad = degToRadLocal(spec.angleDeg)
+      const half = { x: (Math.cos(rad) * length) / 2, y: (Math.sin(rad) * length) / 2 }
+      const p1 = { x: -half.x, y: -half.y }
+      const p2 = { x: half.x, y: half.y }
+      const bounds = boundsOfPoints([p1, p2])
+      obj = this.baseObject('line', atWorld.x + bounds.x, atWorld.y + bounds.y, Math.max(bounds.width, 1), Math.max(bounds.height, 1))
+      obj.points = [
+        { x: p1.x - bounds.x, y: p1.y - bounds.y },
+        { x: p2.x - bounds.x, y: p2.y - bounds.y },
+      ]
+      obj.fillType = 'color'
+      obj.stroke = spec.stroke
+    }
+
+    this.doc = { ...this.doc, objects: [...this.doc.objects, obj] }
+    this.selection = [obj.id]
+    this.commit(before)
+    this.tool = 'select'
+    this.notify()
+    this.scheduleRender()
   }
 
   private commitDraftObject(force: boolean) {
@@ -1300,7 +1474,197 @@ export class CanvasEngine {
 
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0)
     this.drawSelectionOverlay(ctx)
+    if (this.doc.settings.showDimensions ?? true) this.drawLiveDimensions(ctx)
+    this.drawDraftLabel(ctx)
+    this.drawMeasure(ctx)
+    this.drawAlignmentGuides(ctx)
     this.drawMarquee(ctx)
+  }
+
+  /** A small screen-space pill label anchored near `worldAnchor`, offset toward screen bottom-right. */
+  private drawLabelPill(
+    ctx: CanvasRenderingContext2D,
+    text: string,
+    worldAnchor: Point,
+    offset = { x: 14, y: 14 },
+    bg = 'rgba(34, 31, 27, 0.88)',
+    fg = '#f6f1ea',
+  ) {
+    const screenPt = this.worldToScreen(worldAnchor)
+    this.drawScreenPill(ctx, text, screenPt.x + offset.x, screenPt.y + offset.y, bg, fg)
+  }
+
+  /** Same pill, but centred horizontally on an already-known screen point and placed just above it. */
+  private drawCenteredScreenPill(ctx: CanvasRenderingContext2D, text: string, screenPt: Point, bg: string, fg: string) {
+    ctx.save()
+    ctx.font = '600 12px Manrope, sans-serif'
+    const boxW = ctx.measureText(text).width + 16
+    ctx.restore()
+    this.drawScreenPill(ctx, text, screenPt.x - boxW / 2, screenPt.y - 32, bg, fg)
+  }
+
+  private drawScreenPill(ctx: CanvasRenderingContext2D, text: string, bx: number, by: number, bg: string, fg: string) {
+    const padX = 8
+    const boxH = 22
+    ctx.save()
+    ctx.font = '600 12px Manrope, sans-serif'
+    const boxW = ctx.measureText(text).width + padX * 2
+    ctx.fillStyle = bg
+    ctx.beginPath()
+    ctx.roundRect(bx, by, boxW, boxH, 5)
+    ctx.fill()
+    ctx.fillStyle = fg
+    ctx.textAlign = 'left'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(text, bx + padX, by + boxH / 2)
+    ctx.restore()
+  }
+
+  /**
+   * Manual Measure tool (AURA CANVAS V3A) — always ephemeral (never written
+   * to doc.objects/history). Visually distinct (blue) from the amber
+   * automatic-dimension labels so the two are never confused: this measures
+   * arbitrary distance, it doesn't describe an object.
+   */
+  private drawMeasure(ctx: CanvasRenderingContext2D) {
+    const pair = this.measureDraft ? { a: this.measureDraft.start, b: this.measureDraft.current } : this.lastMeasurement
+    if (!pair) return
+    const { a, b } = pair
+    const sa = this.worldToScreen(a)
+    const sb = this.worldToScreen(b)
+    const unit = this.doc.settings.unit
+    const MEASURE_COLOR = '#2f6fed'
+
+    ctx.save()
+    ctx.strokeStyle = MEASURE_COLOR
+    ctx.fillStyle = MEASURE_COLOR
+    ctx.lineWidth = 2
+    ctx.setLineDash([7, 5])
+    ctx.beginPath()
+    ctx.moveTo(sa.x, sa.y)
+    ctx.lineTo(sb.x, sb.y)
+    ctx.stroke()
+    ctx.setLineDash([])
+    for (const p of [sa, sb]) {
+      ctx.beginPath()
+      ctx.arc(p.x, p.y, 4, 0, Math.PI * 2)
+      ctx.fill()
+    }
+    ctx.restore()
+
+    const midScreen = { x: (sa.x + sb.x) / 2, y: (sa.y + sb.y) / 2 }
+    this.drawCenteredScreenPill(ctx, formatDimension(distance(a, b), unit), midScreen, MEASURE_COLOR, '#ffffff')
+
+    // Horizontal/vertical legs "where useful" — skip when the segment is already
+    // purely horizontal or vertical (the main label already covers that case).
+    const dxWorld = Math.abs(b.x - a.x)
+    const dyWorld = Math.abs(b.y - a.y)
+    const minLegScreen = 20
+    if (dxWorld * this.viewport.zoom > minLegScreen && dyWorld * this.viewport.zoom > minLegScreen) {
+      const corner = { x: sb.x, y: sa.y }
+      ctx.save()
+      ctx.strokeStyle = 'rgba(47, 111, 237, 0.45)'
+      ctx.lineWidth = 1.5
+      ctx.setLineDash([4, 4])
+      ctx.beginPath()
+      ctx.moveTo(sa.x, sa.y)
+      ctx.lineTo(corner.x, corner.y)
+      ctx.lineTo(sb.x, sb.y)
+      ctx.stroke()
+      ctx.restore()
+      this.drawCenteredScreenPill(ctx, formatDimension(dxWorld, unit), { x: (sa.x + corner.x) / 2, y: corner.y }, 'rgba(47, 111, 237, 0.75)', '#ffffff')
+      this.drawCenteredScreenPill(ctx, formatDimension(dyWorld, unit), { x: corner.x, y: (corner.y + sb.y) / 2 }, 'rgba(47, 111, 237, 0.75)', '#ffffff')
+    }
+  }
+
+  /** Subtle full-span alignment guide lines while a move-drag is snapped to another object's edge/centre. */
+  private drawAlignmentGuides(ctx: CanvasRenderingContext2D) {
+    const { x, y } = this.alignmentGuides
+    if (x === undefined && y === undefined) return
+    ctx.save()
+    ctx.strokeStyle = '#e0498a'
+    ctx.lineWidth = 1
+    ctx.setLineDash([5, 4])
+    if (x !== undefined) {
+      const sx = this.worldToScreen({ x, y: 0 }).x
+      ctx.beginPath()
+      ctx.moveTo(sx, 0)
+      ctx.lineTo(sx, this.cssHeight)
+      ctx.stroke()
+    }
+    if (y !== undefined) {
+      const sy = this.worldToScreen({ x: 0, y }).y
+      ctx.beginPath()
+      ctx.moveTo(0, sy)
+      ctx.lineTo(this.cssWidth, sy)
+      ctx.stroke()
+    }
+    ctx.restore()
+  }
+
+  /** Live width/height/diameter/length readout while dragging to draw a rectangle/square/circle/line. */
+  private drawDraftLabel(ctx: CanvasRenderingContext2D) {
+    const draft = this.draft
+    if (!draft) return
+    const unit = this.doc.settings.unit
+    let text: string | null = null
+
+    if (draft.type === 'rectangle') {
+      const w = Math.abs(draft.current.x - draft.start.x)
+      const h = Math.abs(draft.current.y - draft.start.y)
+      text = formatDimensionPair(w, h, unit)
+    } else if (draft.type === 'square') {
+      const size = Math.max(Math.abs(draft.current.x - draft.start.x), Math.abs(draft.current.y - draft.start.y))
+      text = formatDimension(size, unit)
+    } else if (draft.type === 'circle') {
+      const size = Math.max(Math.abs(draft.current.x - draft.start.x), Math.abs(draft.current.y - draft.start.y))
+      text = `Ø${formatDimensionValue(size, unit)} ${unitSuffix(unit)}`
+    } else if (draft.type === 'line') {
+      text = formatDimension(distance(draft.start, draft.current), unit)
+    }
+    if (!text) return
+    this.drawLabelPill(ctx, text, draft.current)
+  }
+
+  /**
+   * Automatic live dimensions (AURA CANVAS V3A) — a pure render overlay for
+   * each selected rectangle/square/circle/line/arc, never persisted geometry
+   * or user-editable text, so toggling "Show Dimensions" off never touches
+   * the object's actual data.
+   */
+  private drawLiveDimensions(ctx: CanvasRenderingContext2D) {
+    const unit = this.doc.settings.unit
+    for (const id of this.selection) {
+      const o = this.doc.objects.find((oo) => oo.id === id)
+      if (!o || !o.visible) continue
+      let text: string | null = null
+      let anchorWorld: Point
+
+      if (o.type === 'rectangle' || o.type === 'square') {
+        text = o.type === 'square' ? formatDimension(o.width, unit) : formatDimensionPair(o.width, o.height, unit)
+        anchorWorld = rotatePoint({ x: o.x + o.width, y: o.y + o.height }, objectCenter(o), o.rotation)
+      } else if (o.type === 'circle') {
+        text = `Ø${formatDimensionValue(o.width, unit)} ${unitSuffix(unit)}`
+        anchorWorld = rotatePoint({ x: o.x + o.width, y: o.y + o.height }, objectCenter(o), o.rotation)
+      } else if (o.type === 'line' && o.points && o.points.length >= 2) {
+        const [p1, p2] = o.points
+        text = formatDimension(distance(p1, p2), unit)
+        anchorWorld = { x: o.x + Math.max(p1.x, p2.x), y: o.y + Math.max(p1.y, p2.y) }
+      } else if (o.type === 'arc' && o.points && o.points.length >= 2) {
+        const [p1, p2] = o.points
+        const arc = arcFromBulge(p1, p2, o.arcBulge ?? 0.5)
+        if (arc) {
+          text = `R${formatDimensionValue(arc.radius, unit)} ${unitSuffix(unit)}`
+          anchorWorld = { x: o.x + Math.max(p1.x, p2.x), y: o.y + Math.max(p1.y, p2.y) }
+        } else {
+          continue
+        }
+      } else {
+        continue
+      }
+      if (!text) continue
+      this.drawLabelPill(ctx, text, anchorWorld, { x: 10, y: 10 })
+    }
   }
 
   private drawGrid(ctx: CanvasRenderingContext2D) {
@@ -1365,7 +1729,12 @@ export class CanvasEngine {
       case 'rectangle':
       case 'square':
         ctx.beginPath()
-        ctx.rect(-hw, -hh, o.width, o.height)
+        if (o.cornerRadius && o.cornerRadius > 0) {
+          const r = Math.min(o.cornerRadius, hw, hh)
+          ctx.roundRect(-hw, -hh, o.width, o.height, r)
+        } else {
+          ctx.rect(-hw, -hh, o.width, o.height)
+        }
         this.paintClosedFill(ctx, o, hw, hh)
         if (o.strokeEnabled) ctx.stroke()
         break
@@ -1702,6 +2071,22 @@ export function formatDimension(mm: number, unit: CanvasUnit): string {
   if (unit === 'mm') return `${Math.round(mm)} mm`
   if (unit === 'cm') return `${(mm / 10).toFixed(1)} cm`
   return `${(mm / 1000).toFixed(2)} m`
+}
+
+/** Same numeric formatting as formatDimension, without the trailing unit — for compact combined labels like "2400 × 750 mm". */
+function formatDimensionValue(mm: number, unit: CanvasUnit): string {
+  if (unit === 'mm') return `${Math.round(mm)}`
+  if (unit === 'cm') return `${(mm / 10).toFixed(1)}`
+  return `${(mm / 1000).toFixed(2)}`
+}
+
+function unitSuffix(unit: CanvasUnit): string {
+  return unit
+}
+
+/** "2400 × 750 mm" — width/height sharing one unit suffix. */
+function formatDimensionPair(wMm: number, hMm: number, unit: CanvasUnit): string {
+  return `${formatDimensionValue(wMm, unit)} × ${formatDimensionValue(hMm, unit)} ${unitSuffix(unit)}`
 }
 
 /** Resizes `init` toward `worldPt` via the given handle, accounting for rotation. */

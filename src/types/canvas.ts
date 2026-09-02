@@ -26,6 +26,7 @@ export type CanvasToolId =
   | 'dimension'
   | 'fill'
   | 'eyedropper'
+  | 'measure'
 
 /** Object types buildable in this phase. */
 export type DrawableObjectType =
@@ -104,6 +105,8 @@ export interface CanvasObject {
   arcBulge?: number
   /** Polygon only: true once the user has closed the shape. */
   closed?: boolean
+  /** Rectangle/square only (AURA CANVAS V3A): corner radius in mm, clamped to half the smaller side when rendered. */
+  cornerRadius?: number
 
   // Text
   text?: string
@@ -144,6 +147,12 @@ export interface CanvasSettings {
   ortho: boolean
   unit: CanvasUnit
   viewMode: CanvasViewMode
+  /**
+   * AURA CANVAS V3A — automatic live dimension annotations on selected
+   * objects. Optional (rather than required) so documents saved before V3A
+   * still load correctly; engine reads it as `?? true`.
+   */
+  showDimensions?: boolean
 }
 
 export interface CanvasDocument {
@@ -168,3 +177,9 @@ export const DEFAULT_LAYERS: Omit<CanvasLayer, 'id'>[] = [
 ]
 
 export const CLOSED_SHAPE_TYPES: CanvasObjectType[] = ['rectangle', 'square', 'circle', 'polygon']
+
+/** AURA CANVAS V3A — the double-click/double-tap precision-creation popup's typed input, per tool. */
+export type PreciseCreateSpec =
+  | { type: 'rectangle'; width: number; height: number; cornerRadius: number; fill: string; stroke: string }
+  | { type: 'circle'; diameter: number; fill: string; stroke: string }
+  | { type: 'line'; length: number; angleDeg: number; stroke: string }

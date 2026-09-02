@@ -139,6 +139,28 @@ export function distance(a: Point, b: Point): number {
 }
 
 /**
+ * AURA CANVAS V3A — smart snap/alignment candidates for an object: its
+ * axis-aligned bounding-box edges and centre, in world (document) space.
+ * Used to snap a moving object's edges/centre to another object's, and to
+ * draw the matching alignment guide line. Deliberately collapses the many
+ * spec-listed concepts (edges/endpoints/centers/midpoints) onto these six
+ * values — for an axis-aligned bbox, "midpoint of the left edge" and "left
+ * edge" are the same x, so this covers the practically useful cases without
+ * a separate per-edge-midpoint model.
+ */
+export function objectSnapPoints(obj: Pick<CanvasObject, 'x' | 'y' | 'width' | 'height' | 'rotation'>): { xs: number[]; ys: number[] } {
+  const corners = rotatedCorners(obj)
+  const xs = corners.map((c) => c.x)
+  const ys = corners.map((c) => c.y)
+  const minX = Math.min(...xs)
+  const maxX = Math.max(...xs)
+  const minY = Math.min(...ys)
+  const maxY = Math.max(...ys)
+  const center = objectCenter(obj)
+  return { xs: [minX, maxX, center.x], ys: [minY, maxY, center.y] }
+}
+
+/**
  * Converts a 2-point + bulge arc (DXF-style: bulge = tan(includedAngle/4))
  * into an SVG/Canvas-friendly {center, radius, startAngle, endAngle, ccw}.
  * bulge 0 degrades to a straight segment.

@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { Check } from 'lucide-react'
 import type { CanvasEngine, CanvasEngineSnapshot } from '@/lib/canvasEngine'
-import type { CanvasObject } from '@/types/canvas'
+import type { CanvasObject, PreciseCreateSpec, Point } from '@/types/canvas'
+import { PrecisionCreatePopup } from './PrecisionCreatePopup'
 
 interface CanvasSurfaceProps {
   engine: CanvasEngine
@@ -14,6 +15,24 @@ const CURSOR_BY_TOOL: Record<string, string> = {
   fill: 'crosshair',
   eyedropper: 'crosshair',
   text: 'text',
+  measure: 'crosshair',
+}
+
+const PRECISION_TOOLS = new Set(['rectangle', 'circle', 'line'])
+const DOUBLE_TAP_MS = 400
+const DOUBLE_TAP_DIST = 28
+const TAP_DRAG_THRESHOLD = 10
+
+function isEditableTarget(el: EventTarget | null): boolean {
+  if (!(el instanceof HTMLElement)) return false
+  return el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable
+}
+
+interface PrecisionPopupState {
+  tool: 'rectangle' | 'circle' | 'line'
+  worldPoint: Point
+  clientX: number
+  clientY: number
 }
 
 export function CanvasSurface({ engine, snapshot }: CanvasSurfaceProps) {
@@ -22,6 +41,12 @@ export function CanvasSurface({ engine, snapshot }: CanvasSurfaceProps) {
   const pointersRef = useRef(new Map<number, { x: number; y: number }>())
   const pinchRef = useRef<{ startDistance: number; startZoom: number; worldFocal: { x: number; y: number } } | null>(null)
   const hasFitRef = useRef(false)
+  const pointerDownPtRef = useRef<{ x: number; y: number } | null>(null)
+  const lastTapRef = useRef<{ time: number; x: number; y: number } | null>(null)
+  const suppressedPointerIdRef = useRef<number | null>(null)
+  const [precisionPopup, setPrecisionPopup] = useState<PrecisionPopupState | null>(null)
+  const precisionAnchorRef = useRef<HTMLDivElement>(null)
+  const [spacePanning, setSpacePanning] = useState(false)
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -67,6 +92,9 @@ export function CanvasSurface({ engine, snapshot }: CanvasSurfaceProps) {
 
       if (pointersRef.current.size === 2) {
         engine.cancelGesture()
+        pointerDownPtRef.current = null // a second finger landing means this was never a tap
+        suppressedPointerIdRef.current = null
+        lastTapRef.current = null
         const [a, b] = [...pointersRef.current.values()]
         const mid = midpoint(a, b)
         pinchRef.current = {
@@ -78,8 +106,61 @@ export function CanvasSurface({ engine, snapshot }: CanvasSurfaceProps) {
       }
 
       if (pointersRef.current.size === 1) {
+        // Double-tap must be recognized here, BEFORE engine.pointerDown() runs —
+        // for a two-point tool like Rectangle, the first tap arms a click-click
+        // draft, and the engine treats any second press on the same tool as
+        // "second click of the sequence," committing it immediately. Checking
+        // only on pointerUp (as before) was always too late: by then the tiny
+        // object already exists. So the check moves to the press itself; a
+        // recognized double-tap short-circuits before the engine ever sees it.
+        const last = lastTapRef.current
+        const now = performance.now()
+        const isDoubleTap = !!last && now - last.time < DOUBLE_TAP_MS && distanceBetween(pt, last) < DOUBLE_TAP_DIST
+        lastTapRef.current = null
+
+        if (isDoubleTap && handleDoubleTap(pt, e)) {
+          suppressedPointerIdRef.current = e.pointerId
+          pointerDownPtRef.current = null
+          return
+        }
+
+        pointerDownPtRef.current = pt
         engine.pointerDown(pt, { shiftKey: e.shiftKey })
       }
+    }
+
+    /** Returns true if the double-tap was consumed (precision popup opened, or text edit started) — the caller then skips the normal single-tap finalize for this second tap. */
+    function handleDoubleTap(pt: { x: number; y: number }, e: PointerEvent): boolean {
+      const tool = engine.getSnapshot().tool
+      if (PRECISION_TOOLS.has(tool)) {
+        engine.cancelDraft()
+        setPrecisionPopup({
+          tool: tool as 'rectangle' | 'circle' | 'line',
+          worldPoint: engine.screenToWorld(pt),
+          clientX: e.clientX,
+          clientY: e.clientY,
+        })
+        return true
+      }
+      const obj = engine.objectAtScreen(pt)
+      if (obj && obj.type === 'text' && !obj.locked) {
+        engine.selectObject(obj.id, false)
+        // Recognizing the double-tap on pointerDOWN (rather than pointerUp, as
+        // before) means this now runs before the browser applies this same
+        // mousedown's default action — assigning focus to whatever the
+        // pointerdown originally targeted (the canvas). Opening the text
+        // editor synchronously here would just have that default action steal
+        // focus right back off the freshly-mounted textarea. Deferring two
+        // frames — the same trick already used when text is first created —
+        // lets that settle first.
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            engine.startTextEdit(obj.id)
+          })
+        })
+        return true
+      }
+      return false
     }
 
     function onPointerMove(e: PointerEvent) {
@@ -106,7 +187,30 @@ export function CanvasSurface({ engine, snapshot }: CanvasSurfaceProps) {
       const pt = screenPointFromEvent(e)
       pointersRef.current.delete(e.pointerId)
       if (pointersRef.current.size < 2) pinchRef.current = null
-      if (pointersRef.current.size === 0) engine.pointerUp(pt)
+
+      // This press was already consumed as a double-tap in onPointerDown (a
+      // precision popup opened, or text editing started) — the engine never
+      // saw a matching pointerDown for it, so it must not see a pointerUp
+      // either, and this release must not re-arm the tap tracker.
+      if (suppressedPointerIdRef.current === e.pointerId) {
+        suppressedPointerIdRef.current = null
+        pointerDownPtRef.current = null
+        return
+      }
+
+      const downPt = pointerDownPtRef.current
+      pointerDownPtRef.current = null
+      if (pointersRef.current.size !== 0) return
+
+      // Track this release as a candidate first-tap-of-a-double-tap (rather
+      // than relying solely on native `dblclick`, whose touch behavior is
+      // inconsistent once touch-action is disabled, which this canvas already
+      // does to stop native pinch-zoom). The actual double-tap recognition
+      // happens on the NEXT press, in onPointerDown, before the engine sees it.
+      const wasTap = downPt ? distanceBetween(pt, downPt) < TAP_DRAG_THRESHOLD : false
+      lastTapRef.current = wasTap ? { time: performance.now(), x: pt.x, y: pt.y } : null
+
+      engine.pointerUp(pt)
     }
 
     function onWheel(e: WheelEvent) {
@@ -121,14 +225,17 @@ export function CanvasSurface({ engine, snapshot }: CanvasSurfaceProps) {
       }
     }
 
-    function onDoubleClick(e: MouseEvent) {
-      const rect = canvas!.getBoundingClientRect()
-      const pt = { x: e.clientX - rect.left, y: e.clientY - rect.top }
-      const obj = engine.objectAtScreen(pt)
-      if (obj && obj.type === 'text' && !obj.locked) {
-        engine.selectObject(obj.id, false)
-        engine.startTextEdit(obj.id)
-      }
+    // All touch handling on the canvas goes through the Pointer Events above
+    // (pointerdown/move/up already cover taps, drags and pinch). Left alone,
+    // though, the browser still follows every touch tap with a synthetic
+    // compatibility "click" once touchend fires. That's harmless on a plain
+    // tap, but when the tap just opened a popover (the precision popup's
+    // double-tap), the ghost click lands on the popover's now-covering
+    // backdrop and closes it immediately via its click-outside handler.
+    // Suppressing it at the source — touchstart, the only place Chromium
+    // reliably honors preventDefault() for this — avoids that race entirely.
+    function onTouchStart(e: TouchEvent) {
+      e.preventDefault()
     }
 
     canvas.addEventListener('pointerdown', onPointerDown)
@@ -136,14 +243,40 @@ export function CanvasSurface({ engine, snapshot }: CanvasSurfaceProps) {
     canvas.addEventListener('pointerup', onPointerUp)
     canvas.addEventListener('pointercancel', onPointerUp)
     canvas.addEventListener('wheel', onWheel, { passive: false })
-    canvas.addEventListener('dblclick', onDoubleClick)
+    canvas.addEventListener('touchstart', onTouchStart, { passive: false })
     return () => {
       canvas.removeEventListener('pointerdown', onPointerDown)
       canvas.removeEventListener('pointermove', onPointerMove)
       canvas.removeEventListener('pointerup', onPointerUp)
       canvas.removeEventListener('pointercancel', onPointerUp)
       canvas.removeEventListener('wheel', onWheel)
-      canvas.removeEventListener('dblclick', onDoubleClick)
+      canvas.removeEventListener('touchstart', onTouchStart)
+    }
+  }, [engine])
+
+  // Desktop "hold Space to pan" — a temporary override on top of whatever
+  // tool is active, so releasing Space resumes exactly where the designer
+  // was (matches the convention from Figma/Illustrator/etc). Skipped while
+  // an input/textarea elsewhere on the page has focus, so typing a literal
+  // space doesn't hijack the canvas.
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.code !== 'Space' || e.repeat || isEditableTarget(e.target)) return
+      e.preventDefault()
+      setSpacePanning(true)
+      engine.setSpacePanOverride(true)
+    }
+    function onKeyUp(e: KeyboardEvent) {
+      if (e.code !== 'Space') return
+      setSpacePanning(false)
+      engine.setSpacePanOverride(false)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    window.addEventListener('keyup', onKeyUp)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('keyup', onKeyUp)
+      engine.setSpacePanOverride(false)
     }
   }, [engine])
 
@@ -156,8 +289,22 @@ export function CanvasSurface({ engine, snapshot }: CanvasSurfaceProps) {
       <canvas
         ref={canvasRef}
         className="absolute inset-0 h-full w-full touch-none select-none"
-        style={{ cursor: CURSOR_BY_TOOL[snapshot.tool] ?? 'crosshair' }}
+        style={{ cursor: spacePanning ? 'grab' : (CURSOR_BY_TOOL[snapshot.tool] ?? 'crosshair') }}
       />
+
+      {precisionPopup && (
+        <>
+          <div ref={precisionAnchorRef} className="pointer-events-none fixed h-px w-px" style={{ left: precisionPopup.clientX, top: precisionPopup.clientY }} />
+          <PrecisionCreatePopup
+            tool={precisionPopup.tool}
+            anchorRef={precisionAnchorRef}
+            defaultFill={snapshot.activeFill === 'none' ? '#c9a15f' : snapshot.activeFill}
+            defaultStroke={snapshot.activeStroke}
+            onCreate={(spec: PreciseCreateSpec) => engine.createPreciseObject(spec, precisionPopup.worldPoint)}
+            onClose={() => setPrecisionPopup(null)}
+          />
+        </>
+      )}
 
       {editingObject && (
         <TextEditOverlay

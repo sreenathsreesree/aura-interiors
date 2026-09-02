@@ -49,6 +49,7 @@ export function createFreshCanvasDocument(
       ortho: false,
       unit: 'mm',
       viewMode: 'plan',
+      showDimensions: true,
     },
     createdAt: now,
     updatedAt: now,

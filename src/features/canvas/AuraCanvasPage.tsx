@@ -48,6 +48,7 @@ export function AuraCanvasPage() {
       } else if (e.key === 'Escape') {
         engine.cancelDraft()
         engine.clearSelection()
+        engine.clearMeasurement()
       } else if (meta && e.key.toLowerCase() === 'z' && e.shiftKey) {
         e.preventDefault()
         engine.redo()
