@@ -16,6 +16,7 @@ const CURSOR_BY_TOOL: Record<string, string> = {
   eyedropper: 'crosshair',
   text: 'text',
   measure: 'crosshair',
+  lasso: 'crosshair',
 }
 
 const PRECISION_TOOLS = new Set(['rectangle', 'circle', 'line'])

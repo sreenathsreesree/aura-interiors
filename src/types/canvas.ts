@@ -27,6 +27,7 @@ export type CanvasToolId =
   | 'fill'
   | 'eyedropper'
   | 'measure'
+  | 'lasso'
 
 /** Object types buildable in this phase. */
 export type DrawableObjectType =

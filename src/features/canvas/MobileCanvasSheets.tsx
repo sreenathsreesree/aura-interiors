@@ -1,8 +1,10 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import {
   ClipboardPaste,
   Copy,
   CopyPlus,
+  Eye,
+  EyeOff,
   FlipHorizontal,
   Grid3x3,
   Group,
@@ -11,6 +13,7 @@ import {
   Magnet,
   Palette,
   Pipette,
+  Repeat2,
   RotateCw,
   Trash2,
   Ungroup,
@@ -21,6 +24,7 @@ import type { CanvasEngine, CanvasEngineSnapshot } from '@/lib/canvasEngine'
 import { getMaterialThumbnailDataUrl } from '@/lib/materialPatterns'
 import { DRAW_TOOLS } from './CanvasToolbars'
 import { ColorPickerContent } from './ColorPicker'
+import { DuplicateOffsetPopup } from './DuplicateOffsetPopup'
 import { MaterialPickerContent } from './MaterialPanel'
 import { PropertyPanel } from './PropertyPanel'
 
@@ -35,8 +39,11 @@ interface Props {
 export function MobileToolSheet({ engine, snapshot, open, onClose }: Props) {
   const [fillOpen, setFillOpen] = useState(false)
   const [materialOpen, setMaterialOpen] = useState(false)
+  const [offsetOpen, setOffsetOpen] = useState(false)
+  const offsetAnchorRef = useRef<HTMLDivElement>(null)
   const hasSelection = snapshot.selection.length > 0
   const selectedLocked = snapshot.selectedObjects.some((o) => o.locked)
+  const selectedHidden = snapshot.selectedObjects.some((o) => !o.visible)
 
   return (
     <Sheet open={open} onClose={onClose} title="Tools">
@@ -154,6 +161,16 @@ export function MobileToolSheet({ engine, snapshot, open, onClose }: Props) {
             <MobileToolChip icon={<Copy className="h-4 w-4" />} label="Copy" disabled={!hasSelection} onClick={() => engine.copySelection()} />
             <MobileToolChip icon={<ClipboardPaste className="h-4 w-4" />} label="Paste" disabled={snapshot.clipboardCount === 0} onClick={() => engine.pasteClipboard()} />
             <MobileToolChip icon={<CopyPlus className="h-4 w-4" />} label="Duplicate" disabled={!hasSelection} onClick={() => engine.duplicateSelected()} />
+            <div ref={offsetAnchorRef} className="relative">
+              <MobileToolChip icon={<Repeat2 className="h-4 w-4" />} label="Duplicate with Offset" disabled={!hasSelection} active={offsetOpen} onClick={() => setOffsetOpen((v) => !v)} />
+              {offsetOpen && (
+                <DuplicateOffsetPopup
+                  anchorRef={offsetAnchorRef}
+                  onDuplicate={(dx, dy, count) => engine.duplicateWithOffset(dx, dy, count)}
+                  onClose={() => setOffsetOpen(false)}
+                />
+              )}
+            </div>
             <MobileToolChip icon={<RotateCw className="h-4 w-4" />} label="Rotate" disabled={!hasSelection} onClick={() => engine.rotateSelectedBy(90)} />
             <MobileToolChip icon={<FlipHorizontal className="h-4 w-4" />} label="Mirror" disabled={!hasSelection} onClick={() => engine.mirrorSelected('horizontal')} />
             <MobileToolChip
@@ -161,6 +178,12 @@ export function MobileToolSheet({ engine, snapshot, open, onClose }: Props) {
               label={selectedLocked ? 'Unlock' : 'Lock'}
               disabled={!hasSelection}
               onClick={() => engine.toggleLockSelected()}
+            />
+            <MobileToolChip
+              icon={selectedHidden ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              label={selectedHidden ? 'Show' : 'Hide'}
+              disabled={!hasSelection}
+              onClick={() => engine.toggleVisibleSelected()}
             />
             <MobileToolChip icon={<Group className="h-4 w-4" />} label="Group" disabled={snapshot.selection.length < 2} onClick={() => engine.groupSelected()} />
             <MobileToolChip icon={<Ungroup className="h-4 w-4" />} label="Ungroup" disabled={!hasSelection} onClick={() => engine.ungroupSelected()} />

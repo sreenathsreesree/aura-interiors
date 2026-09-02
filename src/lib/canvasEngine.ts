@@ -53,7 +53,7 @@ interface Viewport {
   offsetY: number
 }
 
-type DragKind = 'move' | 'resize' | 'rotate' | 'marquee' | 'pan'
+type DragKind = 'move' | 'resize' | 'rotate' | 'marquee' | 'lasso' | 'pan'
 
 interface DragState {
   kind: DragKind
@@ -137,6 +137,8 @@ export class CanvasEngine {
   private drag: DragState | null = null
   private draft: DraftState | null = null
   private marqueeRect: { x: number; y: number; width: number; height: number } | null = null
+  /** V3B lasso tool — world-space polyline while dragging; resolved into a selection on release, then cleared. */
+  private lassoPoints: Point[] = []
 
   /** V3A Measure tool — always ephemeral: never written to doc.objects or undo history. */
   private measureDraft: { start: Point; current: Point } | null = null
@@ -396,6 +398,7 @@ export class CanvasEngine {
   setTool(tool: CanvasToolId) {
     this.cancelDraft()
     if (tool !== 'measure') this.clearMeasurement()
+    this.lassoPoints = []
     this.tool = tool
     if (tool !== 'select') this.selection = []
     this.notify()
@@ -533,11 +536,19 @@ export class CanvasEngine {
     this.recentColors = [color, ...this.recentColors.filter((c) => c !== color)].slice(0, 8)
   }
 
-  private applyToSelection(fn: (o: CanvasObject) => CanvasObject) {
+  /**
+   * `includeLocked: true` is reserved for lock/hide toggling itself — every
+   * other bulk edit (fill, stroke, rotate, mirror, layer move, property
+   * fields) must leave a locked object untouched, otherwise "locked" would
+   * only block dragging and not the "or otherwise edit" half of that rule.
+   */
+  private applyToSelection(fn: (o: CanvasObject) => CanvasObject, opts: { includeLocked?: boolean } = {}) {
     const before = this.snapshot()
     this.doc = {
       ...this.doc,
-      objects: this.doc.objects.map((o) => (this.selection.includes(o.id) ? fn(o) : o)),
+      objects: this.doc.objects.map((o) =>
+        this.selection.includes(o.id) && (opts.includeLocked || !o.locked) ? fn(o) : o,
+      ),
     }
     this.commit(before)
   }
@@ -548,7 +559,7 @@ export class CanvasEngine {
     this.doc = {
       ...this.doc,
       objects: this.doc.objects.map((o) => {
-        if (!this.selection.includes(o.id)) return o
+        if (!this.selection.includes(o.id) || o.locked) return o
         const next = { ...o, ...patch }
         if ((patch.text !== undefined || patch.fontSize !== undefined) && next.type === 'text') {
           const size = measureTextSize(this.ctx, next.text ?? '', next.fontSize ?? 32)
@@ -641,6 +652,25 @@ export class CanvasEngine {
     this.notify()
   }
 
+  /**
+   * Section 11/12 — layer ORDER (this list's position) is purely
+   * organizational, same as everything else about a layer (name,
+   * visibility, lock): it's how the Layers panel lists them, not a z-order
+   * that reaches into `doc.objects`. Object stacking stays exactly what
+   * `reorderSelected` already controls, unaffected by this. Consistent with
+   * the other layer methods above, this isn't part of undo history either.
+   */
+  reorderLayer(layerId: string, direction: 'up' | 'down') {
+    const layers = [...this.doc.layers].sort((a, b) => a.order - b.order)
+    const index = layers.findIndex((l) => l.id === layerId)
+    const swapWith = direction === 'up' ? index - 1 : index + 1
+    if (index === -1 || swapWith < 0 || swapWith >= layers.length) return
+    ;[layers[index], layers[swapWith]] = [layers[swapWith], layers[index]]
+    const reordered = layers.map((l, i) => ({ ...l, order: i }))
+    this.doc = { ...this.doc, layers: reordered }
+    this.notify()
+  }
+
   setSelectedLayer(layerId: string) {
     this.applyToSelection((o) => ({ ...o, layerId }))
     this.notify()
@@ -679,6 +709,25 @@ export class CanvasEngine {
     this.selection = this.doc.objects.filter((o) => o.visible && !o.locked).map((o) => o.id)
     this.notify()
     this.scheduleRender()
+  }
+
+  /**
+   * V3B lasso tool — deliberately lightweight rather than a true polygon
+   * intersection test: an object is selected when its own centre point falls
+   * inside the drawn loop. Simple, fast, and predictable for furniture-sized
+   * shapes without turning this into a vector-clipping system.
+   */
+  private resolveLassoSelection() {
+    const points = this.lassoPoints
+    this.lassoPoints = []
+    if (points.length < 3) return
+    const rawIds = this.doc.objects
+      .filter((o) => o.visible && !o.locked)
+      .filter((o) => pointInPolygon(objectCenter(o), points))
+      .map((o) => o.id)
+    const expanded = new Set<string>()
+    for (const id of rawIds) for (const gid of this.objectsAndSiblings(id)) expanded.add(gid)
+    this.selection = [...new Set([...this.selection, ...expanded])]
   }
 
   // -------------------------------------------------------- object edits
@@ -761,14 +810,14 @@ export class CanvasEngine {
 
   toggleLockSelected() {
     if (this.selection.length === 0) return
-    this.applyToSelection((o) => ({ ...o, locked: !o.locked }))
+    this.applyToSelection((o) => ({ ...o, locked: !o.locked }), { includeLocked: true })
     this.notify()
     this.scheduleRender()
   }
 
   toggleVisibleSelected() {
     if (this.selection.length === 0) return
-    this.applyToSelection((o) => ({ ...o, visible: !o.visible }))
+    this.applyToSelection((o) => ({ ...o, visible: !o.visible }), { includeLocked: true })
     this.notify()
     this.scheduleRender()
   }
@@ -786,18 +835,171 @@ export class CanvasEngine {
     this.notify()
   }
 
-  reorderSelected(direction: 'up' | 'down' | 'front' | 'back') {
-    if (this.selection.length !== 1) return
-    const id = this.selection[0]
+  /**
+   * Splits the current (non-locked) selection into movable clusters — a
+   * grouped object's whole group moves together as one rigid unit, an
+   * ungrouped object is its own cluster of one. Shared by Align and
+   * Distribute so a group's internal arrangement survives either operation
+   * instead of its members scattering independently.
+   */
+  private selectionClusters(): CanvasObject[][] {
+    const byGroup = new Map<string, CanvasObject[]>()
+    for (const o of this.doc.objects) {
+      if (!this.selection.includes(o.id) || o.locked) continue
+      const key = o.groupId ?? o.id
+      const list = byGroup.get(key)
+      if (list) list.push(o)
+      else byGroup.set(key, [o])
+    }
+    return [...byGroup.values()]
+  }
+
+  /** Section 4 — align selected objects'/groups' bounds to the overall selection bounds. */
+  alignSelected(mode: 'left' | 'center' | 'right' | 'top' | 'middle' | 'bottom') {
+    const clusters = this.selectionClusters()
+    if (clusters.length < 2) return
     const before = this.snapshot()
-    const objects = [...this.doc.objects]
-    const index = objects.findIndex((o) => o.id === id)
-    if (index === -1) return
-    const [obj] = objects.splice(index, 1)
-    if (direction === 'up') objects.splice(Math.min(index + 1, objects.length), 0, obj)
-    else if (direction === 'down') objects.splice(Math.max(index - 1, 0), 0, obj)
-    else if (direction === 'front') objects.push(obj)
-    else objects.unshift(obj)
+    const overall = CanvasEngine.boundsOfObjects(clusters.flat())
+    const deltas = new Map<string, { dx: number; dy: number }>()
+
+    for (const cluster of clusters) {
+      const bounds = CanvasEngine.boundsOfObjects(cluster)
+      let dx = 0
+      let dy = 0
+      if (mode === 'left') dx = overall.x - bounds.x
+      else if (mode === 'right') dx = overall.x + overall.width - (bounds.x + bounds.width)
+      else if (mode === 'center') dx = overall.x + overall.width / 2 - (bounds.x + bounds.width / 2)
+      else if (mode === 'top') dy = overall.y - bounds.y
+      else if (mode === 'bottom') dy = overall.y + overall.height - (bounds.y + bounds.height)
+      else dy = overall.y + overall.height / 2 - (bounds.y + bounds.height / 2)
+      for (const o of cluster) deltas.set(o.id, { dx, dy })
+    }
+
+    this.doc = {
+      ...this.doc,
+      objects: this.doc.objects.map((o) => {
+        const d = deltas.get(o.id)
+        return d ? { ...o, x: o.x + d.dx, y: o.y + d.dy } : o
+      }),
+    }
+    this.commit(before)
+    this.notify()
+    this.scheduleRender()
+  }
+
+  /**
+   * Section 5 — equal-gap distribution along one axis. Keeps the two
+   * outermost clusters fixed and spaces the rest so the GAP between adjacent
+   * bounds is identical, which (unlike equal centre-spacing) stays correct
+   * when clusters are different sizes and never resizes anything.
+   */
+  distributeSelected(axis: 'horizontal' | 'vertical') {
+    const clusters = this.selectionClusters()
+    if (clusters.length < 3) return
+    const before = this.snapshot()
+
+    const withBounds = clusters
+      .map((cluster) => ({ cluster, bounds: CanvasEngine.boundsOfObjects(cluster) }))
+      .sort((a, b) => (axis === 'horizontal' ? a.bounds.x - b.bounds.x : a.bounds.y - b.bounds.y))
+
+    const first = withBounds[0].bounds
+    const last = withBounds[withBounds.length - 1].bounds
+    const totalSpan =
+      axis === 'horizontal' ? last.x + last.width - first.x : last.y + last.height - first.y
+    const sumSizes = withBounds.reduce((sum, w) => sum + (axis === 'horizontal' ? w.bounds.width : w.bounds.height), 0)
+    const gap = (totalSpan - sumSizes) / (withBounds.length - 1)
+
+    const deltas = new Map<string, { dx: number; dy: number }>()
+    let cursor = axis === 'horizontal' ? first.x : first.y
+    for (const { cluster, bounds } of withBounds) {
+      const size = axis === 'horizontal' ? bounds.width : bounds.height
+      const targetStart = cursor
+      const currentStart = axis === 'horizontal' ? bounds.x : bounds.y
+      const delta = targetStart - currentStart
+      for (const o of cluster) deltas.set(o.id, axis === 'horizontal' ? { dx: delta, dy: 0 } : { dx: 0, dy: delta })
+      cursor += size + gap
+    }
+
+    this.doc = {
+      ...this.doc,
+      objects: this.doc.objects.map((o) => {
+        const d = deltas.get(o.id)
+        return d ? { ...o, x: o.x + d.dx, y: o.y + d.dy } : o
+      }),
+    }
+    this.commit(before)
+    this.notify()
+    this.scheduleRender()
+  }
+
+  /**
+   * Section 7 — exact-distance duplication: `count` successive copies, each
+   * offset by (dxMm, dyMm) from the previous one, in real-world Canvas
+   * coordinates. Reuses the same groupId-remap pattern as duplicateSelected
+   * so a duplicated group stays one group, not `count` merged ones.
+   */
+  duplicateWithOffset(dxMm: number, dyMm: number, count: number) {
+    if (this.selection.length === 0 || count < 1) return
+    const before = this.snapshot()
+    const source = this.doc.objects.filter((o) => this.selection.includes(o.id))
+    const allCopies: CanvasObject[] = []
+    for (let step = 1; step <= count; step++) {
+      const newGroupMap = new Map<string, string>()
+      for (const o of source) {
+        let groupId = o.groupId
+        if (groupId) {
+          if (!newGroupMap.has(groupId)) newGroupMap.set(groupId, generateId('group'))
+          groupId = newGroupMap.get(groupId)
+        }
+        allCopies.push({ ...o, id: generateId('obj'), x: o.x + dxMm * step, y: o.y + dyMm * step, groupId })
+      }
+    }
+    this.doc = { ...this.doc, objects: [...this.doc.objects, ...allCopies] }
+    this.selection = allCopies.map((c) => c.id)
+    this.commit(before)
+    this.notify()
+    this.scheduleRender()
+  }
+
+  /**
+   * Object-level stacking order (front/back visual z-order within the flat
+   * `doc.objects` array) — deliberately independent of layer membership, per
+   * V3B's "layer = organizational category, stacking = visual order" split.
+   * None of these branches ever touch `layerId`. Works for any selection
+   * size: 'front'/'back' move the whole selected set (in its existing
+   * relative order) to the very end/start of the array; 'up'/'down' step
+   * every selected object past exactly one unselected neighbour, which for a
+   * single selected object is the familiar "swap with the next object" and
+   * generalizes predictably to a multi-selection moving forward/back together.
+   */
+  reorderSelected(direction: 'up' | 'down' | 'front' | 'back') {
+    if (this.selection.length === 0) return
+    const before = this.snapshot()
+    const selected = new Set(this.selection)
+    let objects = [...this.doc.objects]
+
+    if (direction === 'front') {
+      const rest = objects.filter((o) => !selected.has(o.id))
+      const moved = objects.filter((o) => selected.has(o.id))
+      objects = [...rest, ...moved]
+    } else if (direction === 'back') {
+      const rest = objects.filter((o) => !selected.has(o.id))
+      const moved = objects.filter((o) => selected.has(o.id))
+      objects = [...moved, ...rest]
+    } else if (direction === 'up') {
+      for (let i = objects.length - 2; i >= 0; i--) {
+        if (selected.has(objects[i].id) && !selected.has(objects[i + 1].id)) {
+          ;[objects[i], objects[i + 1]] = [objects[i + 1], objects[i]]
+        }
+      }
+    } else {
+      for (let i = 1; i < objects.length; i++) {
+        if (selected.has(objects[i].id) && !selected.has(objects[i - 1].id)) {
+          ;[objects[i], objects[i - 1]] = [objects[i - 1], objects[i]]
+        }
+      }
+    }
+
     this.doc = { ...this.doc, objects }
     this.commit(before)
     this.notify()
@@ -924,6 +1126,7 @@ export class CanvasEngine {
     this.drag = null
     this.draft = null
     this.marqueeRect = null
+    this.lassoPoints = []
     this.alignmentGuides = {}
     this.scheduleRender()
   }
@@ -1006,6 +1209,14 @@ export class CanvasEngine {
     if (this.tool === 'measure') {
       this.measureDraft = { start: worldRaw, current: worldRaw }
       this.lastMeasurement = null
+      this.notify()
+      return
+    }
+
+    if (this.tool === 'lasso') {
+      if (!opts.shiftKey) this.clearSelection()
+      this.lassoPoints = [worldRaw]
+      this.drag = { kind: 'lasso', startWorld: worldRaw, currentWorld: worldRaw, before: [], initial: new Map() }
       this.notify()
       return
     }
@@ -1111,14 +1322,24 @@ export class CanvasEngine {
     }
 
     const hit = this.hitTest(worldRaw)
-    if (hit && !hit.locked) {
+    if (hit) {
+      // A locked object still needs to be selectable directly — otherwise,
+      // with no per-object list anywhere in the UI, locking one from the
+      // property panel and then deselecting it would make it permanently
+      // unreachable, with no way to ever select it again to unlock it. It
+      // just never arms a move-drag, so it can't be dragged out of place.
       if (!this.selection.includes(hit.id)) this.selectObject(hit.id, Boolean(opts.shiftKey))
-      const initial = new Map<string, CanvasObject>()
-      for (const id of this.selection) {
-        const o = this.doc.objects.find((oo) => oo.id === id)
-        if (o) initial.set(id, { ...o })
+      if (!hit.locked) {
+        const initial = new Map<string, CanvasObject>()
+        for (const id of this.selection) {
+          const o = this.doc.objects.find((oo) => oo.id === id)
+          // A mixed selection (e.g. shift-clicked one locked object in with
+          // unlocked ones) still moves — just without dragging the locked
+          // member along, so "must not accidentally move" holds per-object.
+          if (o && !o.locked) initial.set(id, { ...o })
+        }
+        this.drag = { kind: 'move', startWorld: world, currentWorld: world, before: this.snapshot(), initial }
       }
-      this.drag = { kind: 'move', startWorld: world, currentWorld: world, before: this.snapshot(), initial }
       return
     }
 
@@ -1163,6 +1384,16 @@ export class CanvasEngine {
     }
 
     const world = this.maybeSnap(worldRaw)
+
+    if (this.drag.kind === 'lasso') {
+      this.drag.currentWorld = worldRaw
+      const last = this.lassoPoints[this.lassoPoints.length - 1]
+      if (!last || distance(last, worldRaw) > 4 / this.viewport.zoom) {
+        this.lassoPoints.push(worldRaw)
+      }
+      this.scheduleRender()
+      return
+    }
 
     if (this.drag.kind === 'marquee') {
       this.drag.currentWorld = worldRaw
@@ -1287,9 +1518,15 @@ export class CanvasEngine {
     }
     if (this.drag && this.drag.kind === 'marquee') {
       const rect = this.marqueeRect
+      // Direction-sensitive like AutoCAD/most CAD tools: dragging left-to-right
+      // is a "window" select (an object must be fully contained), dragging
+      // right-to-left is a "crossing" select (any intersection qualifies) —
+      // both are predictable once you know the convention, and together they
+      // cover "objects intersecting/contained by the selection area."
+      const draggedRightward = this.drag.currentWorld.x >= this.drag.startWorld.x
       this.marqueeRect = null
       if (rect && (rect.width > 2 || rect.height > 2)) {
-        const ids = this.doc.objects
+        const rawIds = this.doc.objects
           .filter((o) => o.visible && !o.locked)
           .filter((o) => {
             const corners = rotatedCorners(o)
@@ -1297,11 +1534,22 @@ export class CanvasEngine {
             const maxX = Math.max(...corners.map((c) => c.x))
             const minY = Math.min(...corners.map((c) => c.y))
             const maxY = Math.max(...corners.map((c) => c.y))
+            if (draggedRightward) {
+              return minX >= rect.x && maxX <= rect.x + rect.width && minY >= rect.y && maxY <= rect.y + rect.height
+            }
             return minX < rect.x + rect.width && maxX > rect.x && minY < rect.y + rect.height && maxY > rect.y
           })
           .map((o) => o.id)
-        this.selection = ids
+        // Expand to whole groups (grabbing one member selects all of them),
+        // then union with whatever selection shift-drag preserved — a plain
+        // drag already cleared `this.selection` to [] at pointerDown, so this
+        // union is a no-op there and purely additive when shift was held.
+        const expanded = new Set<string>()
+        for (const id of rawIds) for (const gid of this.objectsAndSiblings(id)) expanded.add(gid)
+        this.selection = [...new Set([...this.selection, ...expanded])]
       }
+    } else if (this.drag && this.drag.kind === 'lasso') {
+      this.resolveLassoSelection()
     } else if (this.drag && (this.drag.kind === 'move' || this.drag.kind === 'resize' || this.drag.kind === 'rotate')) {
       this.commit(this.drag.before)
     }
@@ -1479,6 +1727,7 @@ export class CanvasEngine {
     this.drawMeasure(ctx)
     this.drawAlignmentGuides(ctx)
     this.drawMarquee(ctx)
+    this.drawLasso(ctx)
   }
 
   /** A small screen-space pill label anchored near `worldAnchor`, offset toward screen bottom-right. */
@@ -2047,6 +2296,23 @@ export class CanvasEngine {
     ctx.setLineDash([4, 3])
     ctx.fillRect(topLeft.x, topLeft.y, bottomRight.x - topLeft.x, bottomRight.y - topLeft.y)
     ctx.strokeRect(topLeft.x, topLeft.y, bottomRight.x - topLeft.x, bottomRight.y - topLeft.y)
+    ctx.restore()
+  }
+
+  private drawLasso(ctx: CanvasRenderingContext2D) {
+    if (this.lassoPoints.length < 2) return
+    const screenPts = this.lassoPoints.map((p) => this.worldToScreen(p))
+    ctx.save()
+    ctx.fillStyle = 'rgba(150, 111, 48, 0.12)'
+    ctx.strokeStyle = '#966f30'
+    ctx.lineWidth = 1.5
+    ctx.setLineDash([4, 3])
+    ctx.beginPath()
+    ctx.moveTo(screenPts[0].x, screenPts[0].y)
+    for (const p of screenPts.slice(1)) ctx.lineTo(p.x, p.y)
+    ctx.closePath()
+    ctx.fill()
+    ctx.stroke()
     ctx.restore()
   }
 }

@@ -1,5 +1,25 @@
 import { useRef, useState } from 'react'
-import { ArrowDown, ArrowUp, ChevronsDown, ChevronsUp, Eye, EyeOff, Lock, LockOpen, Plus } from 'lucide-react'
+import {
+  AlignCenterHorizontal,
+  AlignCenterVertical,
+  AlignEndHorizontal,
+  AlignEndVertical,
+  AlignHorizontalDistributeCenter,
+  AlignStartHorizontal,
+  AlignStartVertical,
+  AlignVerticalDistributeCenter,
+  ArrowDown,
+  ArrowUp,
+  ChevronDown,
+  ChevronUp,
+  ChevronsDown,
+  ChevronsUp,
+  Eye,
+  EyeOff,
+  Lock,
+  LockOpen,
+  Plus,
+} from 'lucide-react'
 import { cn } from '@/lib/cn'
 import { NumberStepper } from '@/components/ui'
 import type { CanvasEngine, CanvasEngineSnapshot } from '@/lib/canvasEngine'
@@ -113,6 +133,31 @@ export function PropertyPanel({ engine, snapshot, className }: Props) {
                     {align}
                   </button>
                 ))}
+              </div>
+            )}
+
+            {selected.length >= 2 && (
+              <div className="flex flex-col gap-2.5">
+                <div>
+                  <p className="mb-1.5 text-xs font-medium text-ink-500">Align</p>
+                  <div className="flex gap-1.5">
+                    <PanelIconButton icon={<AlignStartVertical className="h-4 w-4" />} label="Align Left" onClick={() => engine.alignSelected('left')} />
+                    <PanelIconButton icon={<AlignCenterVertical className="h-4 w-4" />} label="Align Center" onClick={() => engine.alignSelected('center')} />
+                    <PanelIconButton icon={<AlignEndVertical className="h-4 w-4" />} label="Align Right" onClick={() => engine.alignSelected('right')} />
+                    <PanelIconButton icon={<AlignStartHorizontal className="h-4 w-4" />} label="Align Top" onClick={() => engine.alignSelected('top')} />
+                    <PanelIconButton icon={<AlignCenterHorizontal className="h-4 w-4" />} label="Align Middle" onClick={() => engine.alignSelected('middle')} />
+                    <PanelIconButton icon={<AlignEndHorizontal className="h-4 w-4" />} label="Align Bottom" onClick={() => engine.alignSelected('bottom')} />
+                  </div>
+                </div>
+                {selected.length >= 3 && (
+                  <div>
+                    <p className="mb-1.5 text-xs font-medium text-ink-500">Distribute</p>
+                    <div className="flex gap-1.5">
+                      <PanelIconButton icon={<AlignHorizontalDistributeCenter className="h-4 w-4" />} label="Distribute Horizontally" onClick={() => engine.distributeSelected('horizontal')} />
+                      <PanelIconButton icon={<AlignVerticalDistributeCenter className="h-4 w-4" />} label="Distribute Vertically" onClick={() => engine.distributeSelected('vertical')} />
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </Section>
@@ -233,6 +278,11 @@ export function PropertyPanel({ engine, snapshot, className }: Props) {
                   label={first.locked ? 'Unlock' : 'Lock'}
                   onClick={() => engine.toggleLockSelected()}
                 />
+                <PanelIconButton
+                  icon={!first.visible ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  label={!first.visible ? 'Show' : 'Hide'}
+                  onClick={() => engine.toggleVisibleSelected()}
+                />
               </div>
             </div>
           </Section>
@@ -342,43 +392,66 @@ function PanelIconButton({ icon, label, onClick }: { icon: React.ReactNode; labe
 }
 
 function LayersList({ engine, snapshot }: Props) {
+  const sorted = [...snapshot.layers].sort((a, b) => a.order - b.order)
   return (
     <Section title="Layers">
       <div className="flex flex-col gap-1.5">
-        {[...snapshot.layers]
-          .sort((a, b) => a.order - b.order)
-          .map((layer) => (
-            <div
-              key={layer.id}
-              onClick={() => engine.setActiveLayer(layer.id)}
-              className={cn(
-                'flex cursor-pointer items-center gap-2 rounded-md px-2.5 py-2 text-sm transition-colors',
-                layer.id === snapshot.activeLayerId ? 'bg-brass-500/12 text-brass-700 font-semibold' : 'text-ink-600 hover:bg-sand-50',
-              )}
-            >
-              <span className="min-w-0 flex-1 truncate">{layer.name}</span>
+        {sorted.map((layer, i) => (
+          <div
+            key={layer.id}
+            onClick={() => engine.setActiveLayer(layer.id)}
+            className={cn(
+              'flex cursor-pointer items-center gap-1.5 rounded-md px-2.5 py-2 text-sm transition-colors',
+              layer.id === snapshot.activeLayerId ? 'bg-brass-500/12 text-brass-700 font-semibold' : 'text-ink-600 hover:bg-sand-50',
+            )}
+          >
+            <span className="min-w-0 flex-1 truncate">{layer.name}</span>
+            <div className="flex shrink-0 flex-col">
               <button
                 onClick={(e) => {
                   e.stopPropagation()
-                  engine.toggleLayerVisibility(layer.id)
+                  engine.reorderLayer(layer.id, 'up')
                 }}
-                aria-label={layer.visible ? `Hide ${layer.name}` : `Show ${layer.name}`}
-                className="text-ink-400 hover:text-ink-700"
+                disabled={i === 0}
+                aria-label={`Move ${layer.name} up`}
+                className="text-ink-400 hover:text-ink-700 disabled:opacity-25"
               >
-                {layer.visible ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
+                <ChevronUp className="h-3.5 w-3.5" />
               </button>
               <button
                 onClick={(e) => {
                   e.stopPropagation()
-                  engine.toggleLayerLock(layer.id)
+                  engine.reorderLayer(layer.id, 'down')
                 }}
-                aria-label={layer.locked ? `Unlock ${layer.name}` : `Lock ${layer.name}`}
-                className="text-ink-400 hover:text-ink-700"
+                disabled={i === sorted.length - 1}
+                aria-label={`Move ${layer.name} down`}
+                className="text-ink-400 hover:text-ink-700 disabled:opacity-25"
               >
-                {layer.locked ? <Lock className="h-4 w-4" /> : <LockOpen className="h-4 w-4" />}
+                <ChevronDown className="h-3.5 w-3.5" />
               </button>
             </div>
-          ))}
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                engine.toggleLayerVisibility(layer.id)
+              }}
+              aria-label={layer.visible ? `Hide ${layer.name}` : `Show ${layer.name}`}
+              className="text-ink-400 hover:text-ink-700"
+            >
+              {layer.visible ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
+            </button>
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                engine.toggleLayerLock(layer.id)
+              }}
+              aria-label={layer.locked ? `Unlock ${layer.name}` : `Lock ${layer.name}`}
+              className="text-ink-400 hover:text-ink-700"
+            >
+              {layer.locked ? <Lock className="h-4 w-4" /> : <LockOpen className="h-4 w-4" />}
+            </button>
+          </div>
+        ))}
         <button
           onClick={() => engine.addLayer(`Layer ${snapshot.layers.length + 1}`)}
           className="mt-1 flex h-9 items-center justify-center gap-1.5 rounded-md border-2 border-dashed border-ink-200 text-xs font-semibold text-ink-500 hover:border-ink-400"

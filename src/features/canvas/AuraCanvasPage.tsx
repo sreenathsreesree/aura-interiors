@@ -65,6 +65,15 @@ export function AuraCanvasPage() {
         engine.copySelection()
       } else if (meta && e.key.toLowerCase() === 'v') {
         engine.pasteClipboard()
+      } else if (meta && e.key.toLowerCase() === 'a') {
+        e.preventDefault()
+        engine.selectAll()
+      } else if (meta && e.shiftKey && e.key.toLowerCase() === 'g') {
+        e.preventDefault()
+        engine.ungroupSelected()
+      } else if (meta && e.key.toLowerCase() === 'g') {
+        e.preventDefault()
+        engine.groupSelected()
       }
     }
     window.addEventListener('keydown', onKeyDown)

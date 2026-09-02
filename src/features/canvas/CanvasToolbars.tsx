@@ -7,11 +7,14 @@ import {
   CopyPlus,
   Crosshair,
   Download,
+  Eye,
+  EyeOff,
   FlipHorizontal,
   Focus,
   Grid3x3,
   Group,
   Hand,
+  Lasso,
   Lock,
   LockOpen,
   Magnet,
@@ -23,6 +26,7 @@ import {
   PenTool,
   Pipette,
   Redo2,
+  Repeat2,
   Ruler,
   RotateCw,
   Save,
@@ -45,6 +49,7 @@ import type { CanvasToolId } from '@/types/canvas'
 import { ToolButton } from './ToolButton'
 import { ColorPickerPopover } from './ColorPicker'
 import { MaterialPickerPopover } from './MaterialPanel'
+import { DuplicateOffsetPopup } from './DuplicateOffsetPopup'
 
 interface EngineProps {
   engine: CanvasEngine
@@ -112,6 +117,7 @@ export function CanvasTopBar({
 // -------------------------------------------------------------- shared tool metadata
 export const DRAW_TOOLS: { id: CanvasToolId; icon: React.ReactNode; label: string }[] = [
   { id: 'select', icon: <MousePointer2 className="h-5 w-5" />, label: 'Select' },
+  { id: 'lasso', icon: <Lasso className="h-5 w-5" />, label: 'Lasso' },
   { id: 'pan', icon: <Hand className="h-5 w-5" />, label: 'Move / Pan' },
   { id: 'line', icon: <Minus className="h-5 w-5" />, label: 'Line' },
   { id: 'rectangle', icon: <RectangleHorizontal className="h-5 w-5" />, label: 'Rectangle' },
@@ -129,10 +135,13 @@ export const DRAW_TOOLS: { id: CanvasToolId; icon: React.ReactNode; label: strin
 export function CanvasLeftToolbar({ engine, snapshot }: EngineProps) {
   const [fillPickerOpen, setFillPickerOpen] = useState(false)
   const [materialPickerOpen, setMaterialPickerOpen] = useState(false)
+  const [offsetPopoverOpen, setOffsetPopoverOpen] = useState(false)
   const fillAnchorRef = useRef<HTMLDivElement>(null)
   const materialAnchorRef = useRef<HTMLDivElement>(null)
+  const offsetAnchorRef = useRef<HTMLDivElement>(null)
   const hasSelection = snapshot.selection.length > 0
   const selectedLocked = snapshot.selectedObjects.some((o) => o.locked)
+  const selectedHidden = snapshot.selectedObjects.some((o) => !o.visible)
 
   return (
     <div className="flex h-full w-16 shrink-0 flex-col items-center gap-1 overflow-y-auto border-r border-ink-800 bg-ink-900 py-3 no-scrollbar">
@@ -209,6 +218,22 @@ export function CanvasLeftToolbar({ engine, snapshot }: EngineProps) {
       <ToolButton icon={<Copy className="h-5 w-5" />} label="Copy" disabled={!hasSelection} onClick={() => engine.copySelection()} />
       <ToolButton icon={<ClipboardPaste className="h-5 w-5" />} label="Paste" disabled={snapshot.clipboardCount === 0} onClick={() => engine.pasteClipboard()} />
       <ToolButton icon={<CopyPlus className="h-5 w-5" />} label="Duplicate" disabled={!hasSelection} onClick={() => engine.duplicateSelected()} />
+      <div ref={offsetAnchorRef} className="relative">
+        <ToolButton
+          icon={<Repeat2 className="h-5 w-5" />}
+          label="Duplicate with Offset"
+          disabled={!hasSelection}
+          active={offsetPopoverOpen}
+          onClick={() => setOffsetPopoverOpen((v) => !v)}
+        />
+        {offsetPopoverOpen && (
+          <DuplicateOffsetPopup
+            anchorRef={offsetAnchorRef}
+            onDuplicate={(dx, dy, count) => engine.duplicateWithOffset(dx, dy, count)}
+            onClose={() => setOffsetPopoverOpen(false)}
+          />
+        )}
+      </div>
       <ToolButton icon={<RotateCw className="h-5 w-5" />} label="Rotate 90°" disabled={!hasSelection} onClick={() => engine.rotateSelectedBy(90)} />
       <ToolButton icon={<FlipHorizontal className="h-5 w-5" />} label="Mirror" disabled={!hasSelection} onClick={() => engine.mirrorSelected('horizontal')} />
       <ToolButton
@@ -216,6 +241,12 @@ export function CanvasLeftToolbar({ engine, snapshot }: EngineProps) {
         label={selectedLocked ? 'Unlock' : 'Lock'}
         disabled={!hasSelection}
         onClick={() => engine.toggleLockSelected()}
+      />
+      <ToolButton
+        icon={selectedHidden ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+        label={selectedHidden ? 'Show' : 'Hide'}
+        disabled={!hasSelection}
+        onClick={() => engine.toggleVisibleSelected()}
       />
       <ToolButton icon={<Group className="h-5 w-5" />} label="Group" disabled={snapshot.selection.length < 2} onClick={() => engine.groupSelected()} />
       <ToolButton icon={<Ungroup className="h-5 w-5" />} label="Ungroup" disabled={!hasSelection} onClick={() => engine.ungroupSelected()} />
