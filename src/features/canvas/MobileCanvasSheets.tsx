@@ -29,6 +29,7 @@ import { cn } from '@/lib/cn'
 import { Sheet } from '@/components/ui'
 import type { CanvasEngine, CanvasEngineSnapshot } from '@/lib/canvasEngine'
 import { getMaterialThumbnailDataUrl } from '@/lib/materialPatterns'
+import type { CanvasElevationInfo } from '@/types/canvas'
 import { BOOLEAN_TYPES, DRAW_TOOLS, OFFSET_TYPES } from './CanvasToolbars'
 import { ColorPickerContent } from './ColorPicker'
 import { DuplicateOffsetPopup } from './DuplicateOffsetPopup'
@@ -43,8 +44,15 @@ interface Props {
   onClose: () => void
 }
 
+interface ToolSheetProps extends Props {
+  /** AURA CANVAS V3D — Plan/wall-elevation switcher, mirroring the desktop top bar's view switcher for iPhone. */
+  currentViewId: string
+  walls: CanvasElevationInfo[]
+  onSwitchView: (viewId: string) => void
+}
+
 /** iPhone: the full left-toolbar content reflowed into a touch-friendly grid inside a sheet. */
-export function MobileToolSheet({ engine, snapshot, open, onClose }: Props) {
+export function MobileToolSheet({ engine, snapshot, open, onClose, currentViewId, walls, onSwitchView }: ToolSheetProps) {
   const [fillOpen, setFillOpen] = useState(false)
   const [materialOpen, setMaterialOpen] = useState(false)
   const [offsetOpen, setOffsetOpen] = useState(false)
@@ -60,6 +68,31 @@ export function MobileToolSheet({ engine, snapshot, open, onClose }: Props) {
   return (
     <Sheet open={open} onClose={onClose} title="Tools">
       <div className="flex flex-col gap-5 pb-2">
+        <div>
+          <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-400">View</p>
+          <div className="flex flex-wrap gap-2.5">
+            <MobileToolChip
+              label="Plan"
+              active={currentViewId === 'plan'}
+              onClick={() => {
+                onSwitchView('plan')
+                onClose()
+              }}
+            />
+            {walls.map((w) => (
+              <MobileToolChip
+                key={w.wallIndex}
+                label={w.wallLabel}
+                active={currentViewId === `wall-${w.wallIndex}`}
+                onClick={() => {
+                  onSwitchView(`wall-${w.wallIndex}`)
+                  onClose()
+                }}
+              />
+            ))}
+          </div>
+        </div>
+
         <div>
           <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-400">Draw</p>
           <div className="grid grid-cols-4 gap-2.5">

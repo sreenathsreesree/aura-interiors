@@ -24,6 +24,8 @@ import { computeBoolean, type BooleanOp } from '@/lib/booleanOps'
 import { formatLength, formatLengthPair, formatLengthValue, unitSuffix } from '@/lib/units'
 import type {
   CanvasDocument,
+  CanvasDrawingMode,
+  CanvasElevationInfo,
   CanvasLayer,
   CanvasObject,
   CanvasObjectType,
@@ -31,12 +33,13 @@ import type {
   CanvasToolId,
   CanvasUnit,
   CopiedStyle,
+  DrawingSheetMeta,
   FillFit,
   PathVertex,
   Point,
   PreciseCreateSpec,
 } from '@/types/canvas'
-import { CLOSED_SHAPE_TYPES, BOOLEAN_COMPATIBLE_TYPES } from '@/types/canvas'
+import { CLOSED_SHAPE_TYPES, BOOLEAN_COMPATIBLE_TYPES, DEFAULT_SHEET_META } from '@/types/canvas'
 import type { Material } from '@/types/materials'
 import { getMaterialById } from '@/data/materials'
 import { getMaterialPatternCanvas } from '@/lib/materialPatterns'
@@ -122,6 +125,10 @@ export interface CanvasEngineSnapshot {
   selectedVertexIndex: number | null
   /** V3C Pen tool — vertex count of the in-progress draft while actively drawing a new path (0 when not drawing one). */
   penDraftVertexCount: number
+  /** V3D — which drawing this document is: 'plan' or 'wall-1'..'wall-4'. */
+  viewId: string
+  /** V3D — wall metadata, present only when viewId is an elevation. */
+  elevation: CanvasElevationInfo | null
 }
 
 function clamp(v: number, min: number, max: number): number {
@@ -277,6 +284,8 @@ export class CanvasEngine {
       editingPathId: this.editingPathId,
       selectedVertexIndex: this.selectedVertexIndex,
       penDraftVertexCount: this.penDraft?.length ?? 0,
+      viewId: this.doc.viewId ?? 'plan',
+      elevation: this.doc.elevation ?? null,
     }
     return this.snapshotCache
   }
@@ -286,13 +295,37 @@ export class CanvasEngine {
     return { ...this.doc, objects: cloneObjects(this.doc.objects), updatedAt: new Date().toISOString() }
   }
 
+  /**
+   * AURA CANVAS V3D — swaps in a different document wholesale (used to
+   * switch between a room's Plan and its wall elevations, all the SAME
+   * CanvasEngine/rendering/tool code — no separate Plan/Elevation engine).
+   * Clears every piece of in-progress interaction state so nothing from the
+   * previous drawing (a half-drawn Pen path, an open vertex-edit session, a
+   * live measurement, an armed leader target) leaks into the next one.
+   */
   loadDocument(doc: CanvasDocument) {
     this.doc = doc
     this.selection = []
+    this.tool = 'select'
     this.past = []
     this.future = []
     this.draft = null
     this.drag = null
+    this.marqueeRect = null
+    this.lassoPoints = []
+    this.penDraft = null
+    this.editingPathId = null
+    this.selectedVertexIndex = null
+    this.penDrag = null
+    this.penDragBefore = null
+    this.penDownScreen = null
+    this.penActiveVertexIndex = null
+    this.penHoverPoint = null
+    this.pendingLeaderTextId = null
+    this.measureDraft = null
+    this.lastMeasurement = null
+    this.alignmentGuides = {}
+    this.editingTextId = null
     this.notify()
     this.scheduleRender()
   }
@@ -716,6 +749,52 @@ export class CanvasEngine {
   setViewMode(mode: CanvasSettings['viewMode']) {
     this.doc = { ...this.doc, settings: { ...this.doc.settings, viewMode: mode } }
     this.notify()
+  }
+
+  /**
+   * AURA CANVAS V3D — Designer/Execution/Presentation. Same category as
+   * setUnit/toggleGrid/etc: a pure settings mutation, not part of the
+   * object-undo history (nothing here ever touches doc.objects). The mode
+   * itself only *reads* here; every visibility effect it has lives in the
+   * `effective*` render-gating helpers below and in `drawObjects`, so
+   * switching modes never deletes or mutates a single object, layer, or
+   * other setting — only what gets drawn this frame.
+   */
+  setDrawingMode(mode: CanvasDrawingMode) {
+    this.doc = { ...this.doc, settings: { ...this.doc.settings, drawingMode: mode } }
+    this.notify()
+    this.scheduleRender()
+  }
+
+  setSheetMeta(patch: Partial<DrawingSheetMeta>) {
+    const sheet = { ...(this.doc.settings.sheet ?? DEFAULT_SHEET_META), ...patch }
+    this.doc = { ...this.doc, settings: { ...this.doc.settings, sheet } }
+    this.notify()
+  }
+
+  /** Designer mode (default) renders exactly as every prior phase; Execution/Presentation force the grid off for a cleaner handoff/client drawing. */
+  private effectiveShowGrid(): boolean {
+    if ((this.doc.settings.drawingMode ?? 'designer') !== 'designer') return false
+    return this.doc.settings.showGrid
+  }
+
+  /** Execution forces automatic dimensions ON (the point of that mode); Presentation forces them OFF; Designer keeps the existing user toggle untouched. */
+  private effectiveShowDimensions(): boolean {
+    const mode = this.doc.settings.drawingMode ?? 'designer'
+    if (mode === 'execution') return true
+    if (mode === 'presentation') return false
+    return this.doc.settings.showDimensions ?? true
+  }
+
+  /** Selection outline + resize/rotate handles are editing chrome — hidden in Execution and Presentation ("selection handles OFF"), never in Designer. */
+  private effectiveShowSelectionChrome(): boolean {
+    return (this.doc.settings.drawingMode ?? 'designer') === 'designer'
+  }
+
+  /** Presentation hides the Annotations and Dimensions layers by NAME (not by mutating layer.visible) — non-destructive, and consistent with "reuse the existing layer system" rather than inventing a parallel one. Switching back to Designer/Execution restores them instantly. */
+  private modeHidesLayer(layer: CanvasLayer | undefined): boolean {
+    if ((this.doc.settings.drawingMode ?? 'designer') !== 'presentation') return false
+    return layer?.name === 'Annotations' || layer?.name === 'Dimensions'
   }
 
   // -------------------------------------------------------------- layers
@@ -2545,6 +2624,92 @@ export class CanvasEngine {
     return this.canvas.toDataURL('image/png')
   }
 
+  /**
+   * AURA CANVAS V3D — a lightweight drawing-sheet export (section 13): the
+   * existing exportPNG() raster of whatever is currently on screen (so it
+   * already respects Execution/Presentation visibility — grid/selection/
+   * dimensions are simply never drawn onto that canvas in those modes),
+   * composited onto an A4/A3 page with a title block below it. This does
+   * NOT attempt true physical print-scale rendering (1mm-on-paper =
+   * N-mm-real-world) — the scale is recorded and printed as a label only,
+   * per the spec's explicit allowance to keep the geometry engine untouched
+   * and implement the sheet as metadata + a clean composed export.
+   */
+  exportSheetPNG(context: { projectName: string; clientName: string; roomName: string }): string | null {
+    if (!this.canvas) return null
+    const sheet = this.doc.settings.sheet ?? DEFAULT_SHEET_META
+    const mm = sheet.size === 'A4' ? { w: 210, h: 297 } : { w: 297, h: 420 }
+    const PX_PER_MM = 6
+    const pageW = Math.round(mm.w * PX_PER_MM)
+    const pageH = Math.round(mm.h * PX_PER_MM)
+    const off = document.createElement('canvas')
+    off.width = pageW
+    off.height = pageH
+    const ctx = off.getContext('2d')
+    if (!ctx) return null
+
+    ctx.fillStyle = '#ffffff'
+    ctx.fillRect(0, 0, pageW, pageH)
+    ctx.strokeStyle = '#221f1b'
+    ctx.lineWidth = 2
+    ctx.strokeRect(8, 8, pageW - 16, pageH - 16)
+
+    const titleBlockH = Math.round(pageH * 0.16)
+    const area = { x: 16, y: 16, w: pageW - 32, h: pageH - titleBlockH - 24 }
+    const src = this.canvas
+    const scale = Math.min(area.w / src.width, area.h / src.height)
+    const dw = src.width * scale
+    const dh = src.height * scale
+    const dx = area.x + (area.w - dw) / 2
+    const dy = area.y + (area.h - dh) / 2
+    ctx.drawImage(src, dx, dy, dw, dh)
+    ctx.strokeStyle = '#c9bfae'
+    ctx.lineWidth = 1
+    ctx.strokeRect(area.x, area.y, area.w, area.h)
+
+    const tbY = pageH - titleBlockH - 8
+    ctx.strokeStyle = '#221f1b'
+    ctx.lineWidth = 1.5
+    ctx.strokeRect(16, tbY, pageW - 32, titleBlockH)
+
+    ctx.fillStyle = '#221f1b'
+    ctx.textBaseline = 'top'
+    ctx.font = `700 ${Math.round(PX_PER_MM * 4)}px Manrope, sans-serif`
+    ctx.fillText('AURA INTERIORS', 24, tbY + 8)
+
+    const drawingTypeLabel = (this.doc.viewId ?? 'plan') === 'plan' ? 'Plan' : `Elevation — ${this.doc.elevation?.wallLabel ?? ''}`
+    const fields: [string, string][] = [
+      ['Project', context.projectName],
+      ['Client', context.clientName || '—'],
+      ['Room', context.roomName],
+      ['Drawing', sheet.drawingTitle || drawingTypeLabel],
+      ['Type', drawingTypeLabel],
+      ['Drawing No.', sheet.drawingNumber || '—'],
+      ['Revision', sheet.revision || '—'],
+      ['Date', new Date().toLocaleDateString()],
+      ['Scale', sheet.scale],
+      ['Units', this.doc.settings.unit],
+    ]
+    ctx.font = `500 ${Math.round(PX_PER_MM * 2.6)}px Manrope, sans-serif`
+    const fx = 24
+    const fy = tbY + Math.round(PX_PER_MM * 7)
+    const colW = (pageW - 48) / 3
+    fields.forEach(([label, value], i) => {
+      const col = i % 3
+      const row = Math.floor(i / 3)
+      const x = fx + col * colW
+      const y = fy + row * Math.round(PX_PER_MM * 6)
+      ctx.fillText(`${label}: ${value}`, x, y)
+    })
+
+    if (sheet.notes) {
+      ctx.font = `400 ${Math.round(PX_PER_MM * 2.2)}px Manrope, sans-serif`
+      ctx.fillText(`Notes: ${sheet.notes}`, fx, tbY + titleBlockH - Math.round(PX_PER_MM * 4))
+    }
+
+    return off.toDataURL('image/png')
+  }
+
   // -------------------------------------------------------------- render
   private render() {
     const ctx = this.ctx
@@ -2558,14 +2723,14 @@ export class CanvasEngine {
     const { zoom, offsetX, offsetY } = this.viewport
     ctx.setTransform(this.dpr * zoom, 0, 0, this.dpr * zoom, this.dpr * offsetX, this.dpr * offsetY)
 
-    if (this.doc.settings.showGrid) this.drawGrid(ctx)
+    if (this.effectiveShowGrid()) this.drawGrid(ctx)
     this.drawObjects(ctx)
     this.drawCallouts(ctx)
     this.drawDraft(ctx)
 
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0)
-    this.drawSelectionOverlay(ctx)
-    if (this.doc.settings.showDimensions ?? true) this.drawLiveDimensions(ctx)
+    if (this.effectiveShowSelectionChrome()) this.drawSelectionOverlay(ctx)
+    if (this.effectiveShowDimensions()) this.drawLiveDimensions(ctx)
     this.drawDraftLabel(ctx)
     this.drawMeasure(ctx)
     this.drawAlignmentGuides(ctx)
@@ -2801,6 +2966,7 @@ export class CanvasEngine {
     for (const o of this.doc.objects) {
       const layer = layerLookup.get(o.layerId)
       if (!o.visible || (layer && !layer.visible)) continue
+      if (this.modeHidesLayer(layer)) continue
       this.drawObject(ctx, o)
     }
   }

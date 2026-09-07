@@ -188,6 +188,58 @@ export interface CanvasLayer {
 
 export type CanvasViewMode = 'plan' | 'elevation'
 
+/**
+ * AURA CANVAS V3D — the three workspace presentation modes. A pure render/UI
+ * visibility filter (see CanvasEngine's `effective*` helpers) — switching
+ * modes never deletes or mutates any object, layer, or setting; it only
+ * changes what the current render pass draws and which editing chrome the
+ * surrounding React UI shows. 'designer' (default) behaves exactly like all
+ * prior phases — nothing changes for documents saved before V3D.
+ */
+export type CanvasDrawingMode = 'designer' | 'execution' | 'presentation'
+
+/**
+ * AURA CANVAS V3D — which wall an elevation document is for, plus the
+ * wall's own real-world size (derived from the room's stored dimensions,
+ * not re-entered by hand — see canvasStorage's `computeRoomWalls`).
+ * Present only on elevation documents; absent (undefined) on the plan
+ * document, which has no single "wall" of its own.
+ */
+export interface CanvasElevationInfo {
+  wallIndex: number
+  wallLabel: string
+  wallWidthMm: number
+  wallHeightMm: number
+}
+
+export type DrawingSheetSize = 'A4' | 'A3'
+export type DrawingScale = '1:10' | '1:20' | '1:25' | '1:50'
+
+/**
+ * AURA CANVAS V3D — lightweight professional drawing-sheet metadata for
+ * export/print preparation (section 10-12 of the V3D spec). Deliberately
+ * NOT a desktop-publishing document: a handful of title-block fields plus a
+ * sheet size and a labelled scale. The scale is a presentation/export
+ * label only — it never touches the real-world mm geometry underneath.
+ */
+export interface DrawingSheetMeta {
+  size: DrawingSheetSize
+  scale: DrawingScale
+  drawingTitle: string
+  drawingNumber: string
+  revision: string
+  notes: string
+}
+
+export const DEFAULT_SHEET_META: DrawingSheetMeta = {
+  size: 'A4',
+  scale: '1:50',
+  drawingTitle: '',
+  drawingNumber: '',
+  revision: 'A',
+  notes: '',
+}
+
 export interface CanvasSettings {
   gridSize: number // mm
   showGrid: boolean
@@ -201,12 +253,25 @@ export interface CanvasSettings {
    * still load correctly; engine reads it as `?? true`.
    */
   showDimensions?: boolean
+  /** AURA CANVAS V3D — Designer/Execution/Presentation. Engine reads it as `?? 'designer'`. */
+  drawingMode?: CanvasDrawingMode
+  /** AURA CANVAS V3D — drawing-sheet/title-block metadata for this drawing. Engine reads it as `?? DEFAULT_SHEET_META`. */
+  sheet?: DrawingSheetMeta
 }
 
 export interface CanvasDocument {
   id: string
   roomId: string
   projectId: string
+  /**
+   * AURA CANVAS V3D — which drawing of the room this document is:
+   * 'plan', or 'wall-1'..'wall-4' (extensible to more walls where room
+   * geometry supports it). Optional so every document saved before V3D
+   * still loads correctly; storage/engine treat a missing value as 'plan'.
+   */
+  viewId?: string
+  /** AURA CANVAS V3D — present only when viewId is a wall elevation. */
+  elevation?: CanvasElevationInfo
   objects: CanvasObject[]
   layers: CanvasLayer[]
   activeLayerId: string

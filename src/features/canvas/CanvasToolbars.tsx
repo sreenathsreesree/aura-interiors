@@ -12,6 +12,7 @@ import {
   Download,
   Eye,
   EyeOff,
+  FileText,
   FlipHorizontal,
   FlipVertical,
   Focus,
@@ -56,13 +57,15 @@ import { cn } from '@/lib/cn'
 import type { CanvasEngine, CanvasEngineSnapshot } from '@/lib/canvasEngine'
 import { formatDimension } from '@/lib/canvasEngine'
 import { getMaterialThumbnailDataUrl } from '@/lib/materialPatterns'
-import type { CanvasToolId } from '@/types/canvas'
+import type { CanvasElevationInfo, CanvasToolId } from '@/types/canvas'
 import { ToolButton } from './ToolButton'
 import { ColorPickerPopover } from './ColorPicker'
 import { MaterialPickerPopover } from './MaterialPanel'
 import { DuplicateOffsetPopup } from './DuplicateOffsetPopup'
 import { OffsetPopup } from './OffsetPopup'
 import { UnitSelectorPopover } from './UnitSelector'
+import { WallSelectorPopover } from './ViewSelector'
+import { ModeSelectorPopover, MODE_INFO } from './ModeSelector'
 
 interface EngineProps {
   engine: CanvasEngine
@@ -70,6 +73,19 @@ interface EngineProps {
 }
 
 // ------------------------------------------------------------- Top Bar
+interface CanvasTopBarProps {
+  roomName: string
+  onBack: () => void
+  onSave: () => void
+  onExport: () => void
+  onOpenSheet: () => void
+  justSaved: boolean
+  /** AURA CANVAS V3D — which drawing of the room is loaded right now ('plan' or 'wall-N') and the callback to switch. */
+  currentViewId: string
+  walls: CanvasElevationInfo[]
+  onSwitchView: (viewId: string) => void
+}
+
 export function CanvasTopBar({
   engine,
   snapshot,
@@ -77,37 +93,100 @@ export function CanvasTopBar({
   onBack,
   onSave,
   onExport,
+  onOpenSheet,
   justSaved,
-}: EngineProps & { roomName: string; onBack: () => void; onSave: () => void; onExport: () => void; justSaved: boolean }) {
+  currentViewId,
+  walls,
+  onSwitchView,
+}: EngineProps & CanvasTopBarProps) {
+  const [wallPickerOpen, setWallPickerOpen] = useState(false)
+  const wallAnchorRef = useRef<HTMLButtonElement>(null)
+  const [modePickerOpen, setModePickerOpen] = useState(false)
+  const modeAnchorRef = useRef<HTMLButtonElement>(null)
+
+  const isElevation = currentViewId !== 'plan'
+  const activeWall = walls.find((w) => `wall-${w.wallIndex}` === currentViewId) ?? null
+  const drawingMode = snapshot.settings.drawingMode ?? 'designer'
+
+  const contextLine = isElevation
+    ? `Elevation · ${activeWall?.wallLabel ?? ''}${activeWall ? ` · ${formatDimension(activeWall.wallWidthMm, snapshot.settings.unit)} × ${formatDimension(activeWall.wallHeightMm, snapshot.settings.unit)}` : ''}`
+    : 'Plan'
+
   return (
-    <div className="flex h-14 shrink-0 items-center gap-2 border-b border-ink-800 bg-ink-950 px-3 text-sand-50 sm:px-4">
+    <div className="flex h-14 shrink-0 items-center gap-2 overflow-x-auto border-b border-ink-800 bg-ink-950 px-3 text-sand-50 no-scrollbar sm:px-4">
       <ToolButton icon={<ArrowLeft className="h-5 w-5" />} label="Back to Room" onClick={onBack} />
       <div className="min-w-0 px-1">
         <p className="truncate text-sm font-semibold leading-tight">{roomName}</p>
-        <p className="text-[11px] leading-tight text-sand-300/70">AURA Canvas</p>
+        <p className="truncate text-[11px] leading-tight text-sand-300/70">{contextLine}</p>
       </div>
 
       <div className="ml-1 flex shrink-0 items-center gap-1 rounded-full bg-white/5 p-1">
-        {(['plan', 'elevation'] as const).map((mode) => (
-          <button
-            key={mode}
-            onClick={() => engine.setViewMode(mode)}
-            className={cn(
-              'rounded-full px-3 py-1.5 text-xs font-semibold capitalize transition-colors',
-              snapshot.settings.viewMode === mode ? 'bg-brass-500 text-ink-950' : 'text-sand-300 hover:text-sand-50',
-            )}
-          >
-            {mode}
-          </button>
-        ))}
+        <button
+          onClick={() => onSwitchView('plan')}
+          className={cn(
+            'rounded-full px-3 py-1.5 text-xs font-semibold transition-colors',
+            !isElevation ? 'bg-brass-500 text-ink-950' : 'text-sand-300 hover:text-sand-50',
+          )}
+        >
+          Plan
+        </button>
+        <button
+          ref={wallAnchorRef}
+          onClick={() => {
+            if (!isElevation) onSwitchView(`wall-${walls[0]?.wallIndex ?? 1}`)
+            else setWallPickerOpen((v) => !v)
+          }}
+          className={cn(
+            'flex items-center gap-1 rounded-full px-3 py-1.5 text-xs font-semibold transition-colors',
+            isElevation ? 'bg-brass-500 text-ink-950' : 'text-sand-300 hover:text-sand-50',
+          )}
+        >
+          Elevation{isElevation && activeWall ? ` · ${activeWall.wallLabel}` : ''}
+        </button>
+        {wallPickerOpen && (
+          <WallSelectorPopover
+            anchorRef={wallAnchorRef}
+            walls={walls}
+            activeWallIndex={activeWall?.wallIndex ?? null}
+            onSelect={(wallIndex) => onSwitchView(`wall-${wallIndex}`)}
+            onClose={() => setWallPickerOpen(false)}
+            side="left"
+          />
+        )}
       </div>
 
       <div className="flex-1" />
+
+      {/* Always reachable — even on iPhone, and even in Execution/Presentation
+          — this is the only way back to Designer mode once switched away
+          from it, so it must never be hidden behind a "designer-only" chrome rule. */}
+      <div className="relative shrink-0">
+        <button
+          ref={modeAnchorRef}
+          onClick={() => setModePickerOpen((v) => !v)}
+          aria-label="Workspace Mode"
+          className="flex h-10 items-center gap-2 rounded-[--radius-md] bg-white/10 px-3 text-sm font-semibold text-sand-50 transition-colors hover:bg-white/20"
+        >
+          {MODE_INFO[drawingMode].icon}
+          <span className="hidden sm:inline">{MODE_INFO[drawingMode].label}</span>
+        </button>
+        {modePickerOpen && (
+          <ModeSelectorPopover
+            anchorRef={modeAnchorRef}
+            activeMode={drawingMode}
+            onSelect={(m) => engine.setDrawingMode(m)}
+            onClose={() => setModePickerOpen(false)}
+            side="left"
+          />
+        )}
+      </div>
 
       <div className="hidden items-center gap-1 sm:flex">
         <ToolButton icon={<Undo2 className="h-5 w-5" />} label="Undo" disabled={!snapshot.canUndo} onClick={() => engine.undo()} />
         <ToolButton icon={<Redo2 className="h-5 w-5" />} label="Redo" disabled={!snapshot.canRedo} onClick={() => engine.redo()} />
       </div>
+
+      <ToolButton icon={<FileText className="h-5 w-5" />} label="Drawing Sheet" onClick={onOpenSheet} />
 
       <button
         onClick={onSave}
@@ -305,6 +384,7 @@ export function CanvasLeftToolbar({ engine, snapshot }: EngineProps) {
 export function CanvasBottomBar({ engine, snapshot }: EngineProps) {
   const [unitPickerOpen, setUnitPickerOpen] = useState(false)
   const unitAnchorRef = useRef<HTMLButtonElement>(null)
+  const isDesigner = (snapshot.settings.drawingMode ?? 'designer') === 'designer'
 
   return (
     <div className="flex h-13 shrink-0 items-center gap-1.5 overflow-x-auto border-t border-ink-800 bg-ink-950 px-3 no-scrollbar sm:gap-2">
@@ -317,12 +397,20 @@ export function CanvasBottomBar({ engine, snapshot }: EngineProps) {
       <ToolButton icon={<Focus className="h-4 w-4" />} label="Fit Selection" disabled={snapshot.selection.length === 0} onClick={() => engine.fitToSelection()} />
       <ToolButton icon={<Scan className="h-4 w-4" />} label="Reset to 100%" onClick={() => engine.resetZoom()} />
 
-      <div className="mx-1 h-6 w-px shrink-0 bg-white/10" />
-
-      <ChipToggle label="Grid" active={snapshot.settings.showGrid} icon={<Grid3x3 className="h-4 w-4" />} onClick={() => engine.toggleGrid()} />
-      <ChipToggle label="Snap" active={snapshot.settings.snapToGrid} icon={<Magnet className="h-4 w-4" />} onClick={() => engine.toggleSnap()} />
-      <ChipToggle label="Ortho" active={snapshot.settings.ortho} onClick={() => engine.toggleOrtho()} />
-      <ChipToggle label="Dimensions" active={snapshot.settings.showDimensions ?? true} icon={<Ruler className="h-4 w-4" />} onClick={() => engine.toggleShowDimensions()} />
+      {/* Grid/Snap/Ortho/Dimensions are Designer-only editing aids — Execution
+          and Presentation already force grid/dimensions via drawingMode, and
+          snap/ortho have no purpose once you're not drawing, so hiding this
+          whole cluster keeps those modes' "editing controls minimized"
+          promise without touching a single underlying setting. */}
+      {isDesigner && (
+        <>
+          <div className="mx-1 h-6 w-px shrink-0 bg-white/10" />
+          <ChipToggle label="Grid" active={snapshot.settings.showGrid} icon={<Grid3x3 className="h-4 w-4" />} onClick={() => engine.toggleGrid()} />
+          <ChipToggle label="Snap" active={snapshot.settings.snapToGrid} icon={<Magnet className="h-4 w-4" />} onClick={() => engine.toggleSnap()} />
+          <ChipToggle label="Ortho" active={snapshot.settings.ortho} onClick={() => engine.toggleOrtho()} />
+          <ChipToggle label="Dimensions" active={snapshot.settings.showDimensions ?? true} icon={<Ruler className="h-4 w-4" />} onClick={() => engine.toggleShowDimensions()} />
+        </>
+      )}
 
       <div className="mx-1 h-6 w-px shrink-0 bg-white/10" />
 
@@ -340,7 +428,7 @@ export function CanvasBottomBar({ engine, snapshot }: EngineProps) {
           <UnitSelectorPopover anchorRef={unitAnchorRef} activeUnit={snapshot.settings.unit} onSelect={(u) => engine.setUnit(u)} onClose={() => setUnitPickerOpen(false)} side="left" />
         )}
       </div>
-      <span className="hidden shrink-0 text-xs text-sand-400 sm:inline">Grid {formatDimension(snapshot.settings.gridSize, snapshot.settings.unit)}</span>
+      {isDesigner && <span className="hidden shrink-0 text-xs text-sand-400 sm:inline">Grid {formatDimension(snapshot.settings.gridSize, snapshot.settings.unit)}</span>}
     </div>
   )
 }
