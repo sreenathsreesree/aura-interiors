@@ -2,14 +2,17 @@ import { create } from 'zustand'
 import type {
   CatalogueItem,
   Client,
+  DriveReference,
   PricingConfig,
   Project,
+  ProjectReference,
   Quotation,
   QuotationItem,
   Room,
   RoomItem,
   RoomRequirement,
   RoomType,
+  SitePhoto,
 } from '@/types'
 import { SAMPLE_CLIENTS, SAMPLE_PROJECTS, SAMPLE_ROOMS } from '@/data/sampleData'
 import { CATALOGUE_ITEMS } from '@/data/catalogue'
@@ -19,10 +22,15 @@ import { getRoomTypeOption } from '@/data/roomTypes'
 import { buildProjectBoqLines } from '@/lib/pricing'
 import { generateQuotationNumber } from '@/lib/quotation'
 import { generateId } from '@/lib/id'
+import { loadProjectMedia, saveProjectMedia } from '@/lib/projectMediaStorage'
 
 function todayIso(): string {
   return new Date().toISOString().slice(0, 10)
 }
+
+// Read once, synchronously, at module load — mirrors how Canvas documents are
+// read synchronously on mount (see lib/canvasStorage.ts usage).
+const initialProjectMedia = loadProjectMedia()
 
 interface AppState {
   clients: Client[]
@@ -67,6 +75,21 @@ interface AppState {
   ) => void
   setQuotationRoomIncluded: (quotationId: string, roomId: string, isIncluded: boolean) => void
   moveQuotationItem: (quotationId: string, itemId: string, direction: 'up' | 'down') => void
+
+  // Project Media (Site Photos + References — see lib/projectMediaStorage.ts)
+  sitePhotos: SitePhoto[]
+  references: ProjectReference[]
+  addSitePhotos: (
+    projectId: string,
+    photos: { dataUrl: string; roomId?: string; caption?: string }[],
+  ) => void
+  deleteSitePhoto: (photoId: string) => void
+  addLocalReferences: (projectId: string, refs: { dataUrl: string; name: string }[]) => void
+  addDriveReferences: (
+    projectId: string,
+    refs: Omit<DriveReference, 'id' | 'projectId' | 'source' | 'addedAt'>[],
+  ) => void
+  deleteReference: (referenceId: string) => void
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -75,6 +98,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   rooms: SAMPLE_ROOMS,
   quotations: [],
   catalogueItems: CATALOGUE_ITEMS,
+  sitePhotos: initialProjectMedia.sitePhotos,
+  references: initialProjectMedia.references,
 
   addClient: (client) => {
     const newClient: Client = {
@@ -346,6 +371,74 @@ export const useAppStore = create<AppState>((set, get) => ({
         return { ...q, items, updatedAt: todayIso() }
       }),
     }))
+  },
+
+  addSitePhotos: (projectId, photos) => {
+    const now = new Date().toISOString()
+    const newPhotos: SitePhoto[] = photos.map((p) => ({
+      id: generateId('sp'),
+      projectId,
+      roomId: p.roomId,
+      dataUrl: p.dataUrl,
+      caption: p.caption,
+      createdAt: now,
+    }))
+    set((state) => {
+      const sitePhotos = [...newPhotos, ...state.sitePhotos]
+      saveProjectMedia({ sitePhotos, references: state.references })
+      return { sitePhotos }
+    })
+  },
+
+  deleteSitePhoto: (photoId) => {
+    set((state) => {
+      const sitePhotos = state.sitePhotos.filter((p) => p.id !== photoId)
+      saveProjectMedia({ sitePhotos, references: state.references })
+      return { sitePhotos }
+    })
+  },
+
+  addLocalReferences: (projectId, refs) => {
+    const now = new Date().toISOString()
+    const newRefs: ProjectReference[] = refs.map((r) => ({
+      id: generateId('rf'),
+      projectId,
+      source: 'local',
+      dataUrl: r.dataUrl,
+      name: r.name,
+      addedAt: now,
+    }))
+    set((state) => {
+      const references = [...newRefs, ...state.references]
+      saveProjectMedia({ sitePhotos: state.sitePhotos, references })
+      return { references }
+    })
+  },
+
+  addDriveReferences: (projectId, refs) => {
+    const now = new Date().toISOString()
+    const newRefs: ProjectReference[] = refs.map((r) => ({
+      ...r,
+      id: generateId('rf'),
+      projectId,
+      source: 'drive',
+      addedAt: now,
+    }))
+    set((state) => {
+      const references = [...newRefs, ...state.references]
+      saveProjectMedia({ sitePhotos: state.sitePhotos, references })
+      return { references }
+    })
+  },
+
+  deleteReference: (referenceId) => {
+    // Removes AURA's reference record only — for a Drive reference, the
+    // original file in Google Drive is never touched by this action.
+    set((state) => {
+      const references = state.references.filter((r) => r.id !== referenceId)
+      saveProjectMedia({ sitePhotos: state.sitePhotos, references })
+      return { references }
+    })
   },
 }))
 

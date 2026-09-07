@@ -177,6 +177,66 @@ export interface QuotationItem {
   isOptional: boolean
 }
 
+// ---------------------------------------------------------------- Project Media
+// Site Photos and References both belong to a Project (never global — see
+// lib/projectMediaStorage.ts). Kept as two small, separate collections
+// rather than one "media" type: they have different purposes (site
+// documentation vs. design inspiration) and, for References, different
+// possible sources (a locally-uploaded image vs. a Google Drive reference
+// that is never copied into AURA).
+
+// A site photograph — existing conditions, measurements, progress, etc.
+// `roomId` is an optional, lightweight association: a photo belongs to the
+// Project first and foremost, and may additionally be tagged to one Room.
+export interface SitePhoto {
+  id: string
+  projectId: string
+  roomId?: string
+  /** A downscaled data URI — see lib/imageUtils.ts. Swappable for a real cloud storage URL later without changing this field's meaning. */
+  dataUrl: string
+  caption?: string
+  createdAt: string
+}
+
+/**
+ * A locally-uploaded reference image — the file itself lives in AURA
+ * (downscaled + stored the same way Site Photos are), same as any other
+ * V1 image upload.
+ */
+export interface LocalReference {
+  id: string
+  projectId: string
+  source: 'local'
+  dataUrl: string
+  name: string
+  addedAt: string
+}
+
+/**
+ * A Google Drive reference — CRITICAL: this record holds only enough
+ * information to *display* the Drive file (thumbnail/name/link); the image
+ * itself is never downloaded or copied into AURA. Deleting this record only
+ * removes AURA's reference to it — the original file in Drive is untouched.
+ */
+export interface DriveReference {
+  id: string
+  projectId: string
+  source: 'drive'
+  driveFileId: string
+  name: string
+  mimeType: string
+  /** A short-lived Drive-hosted thumbnail URL where the Picker provided one — may expire; the UI falls back to "Reference unavailable" rather than erroring. */
+  thumbnailLink?: string
+  /** A larger Drive-hosted preview URL, when available, used in the full-screen viewer. */
+  previewLink?: string
+  /** Opens the file in Google Drive itself. */
+  webViewLink?: string
+  iconLink?: string
+  addedAt: string
+}
+
+export type ProjectReference = LocalReference | DriveReference
+
 export interface PaymentMilestone {
   id: string
   label: string

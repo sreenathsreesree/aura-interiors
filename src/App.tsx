@@ -12,6 +12,8 @@ import { CataloguePage } from '@/features/catalogue/CataloguePage'
 import { BoqPage } from '@/features/boq/BoqPage'
 import { QuotationBuilderPage } from '@/features/quotation/QuotationBuilderPage'
 import { AuraCanvasPage } from '@/features/canvas/AuraCanvasPage'
+import { SitePhotosPage } from '@/features/media/SitePhotosPage'
+import { ReferencesPage } from '@/features/media/ReferencesPage'
 
 function App() {
   return (
@@ -31,6 +33,8 @@ function App() {
         <Route path="/projects/:projectId/boq" element={<BoqPage />} />
         <Route path="/projects/:projectId/quotation" element={<QuotationBuilderPage />} />
         <Route path="/projects/:projectId/rooms/:roomId/canvas" element={<AuraCanvasPage />} />
+        <Route path="/projects/:projectId/site-photos" element={<SitePhotosPage />} />
+        <Route path="/projects/:projectId/references" element={<ReferencesPage />} />
       </Route>
 
       <Route path="*" element={<Navigate to="/" replace />} />

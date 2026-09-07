@@ -9,6 +9,8 @@ import {
   Settings2,
   ClipboardList,
   FileText,
+  Camera,
+  Image as ImageIcon,
 } from 'lucide-react'
 import { Avatar, Badge, Button, Card, EmptyState, IconButton } from '@/components/ui'
 import { PricingSummary } from '@/components/pricing/PricingSummary'
@@ -29,6 +31,8 @@ export function ProjectDetailPage() {
   const client = useAppStore((s) => s.clients.find((c) => c.id === project?.clientId))
   const rooms = useAppStore(useShallow((s) => s.rooms.filter((r) => r.projectId === projectId)))
   const quotations = useAppStore(useShallow((s) => s.quotations.filter((q) => q.projectId === projectId)))
+  const sitePhotoCount = useAppStore((s) => s.sitePhotos.filter((p) => p.projectId === projectId).length)
+  const referenceCount = useAppStore((s) => s.references.filter((r) => r.projectId === projectId).length)
   const updateProjectPricing = useAppStore((s) => s.updateProjectPricing)
   const createQuotationFromBoq = useAppStore((s) => s.createQuotationFromBoq)
   const [pickerOpen, setPickerOpen] = useState(false)
@@ -140,6 +144,42 @@ export function ProjectDetailPage() {
             <span>
               <span className="block text-sm font-semibold text-ink-900">Bill of Quantities</span>
               <span className="block text-xs text-ink-500">Grouped, priced item breakdown for this project</span>
+            </span>
+          </span>
+          <ChevronRight className="h-5 w-5 shrink-0 text-ink-300" />
+        </button>
+
+        <button
+          onClick={() => navigate(`/projects/${project.id}/site-photos`)}
+          className="mt-3 flex w-full items-center justify-between rounded-[--radius-lg] border-2 border-ink-100 bg-white px-5 py-4 text-left transition-colors hover:border-brass-400 hover:bg-brass-500/5"
+        >
+          <span className="flex items-center gap-3">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[--radius-md] bg-brass-500/12 text-brass-600">
+              <Camera className="h-5 w-5" />
+            </span>
+            <span>
+              <span className="block text-sm font-semibold text-ink-900">Site Photos</span>
+              <span className="block text-xs text-ink-500">
+                {sitePhotoCount > 0 ? `${sitePhotoCount} photo${sitePhotoCount === 1 ? '' : 's'}` : 'Existing conditions, measurements, progress'}
+              </span>
+            </span>
+          </span>
+          <ChevronRight className="h-5 w-5 shrink-0 text-ink-300" />
+        </button>
+
+        <button
+          onClick={() => navigate(`/projects/${project.id}/references`)}
+          className="mt-3 flex w-full items-center justify-between rounded-[--radius-lg] border-2 border-ink-100 bg-white px-5 py-4 text-left transition-colors hover:border-brass-400 hover:bg-brass-500/5"
+        >
+          <span className="flex items-center gap-3">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[--radius-md] bg-brass-500/12 text-brass-600">
+              <ImageIcon className="h-5 w-5" />
+            </span>
+            <span>
+              <span className="block text-sm font-semibold text-ink-900">References</span>
+              <span className="block text-xs text-ink-500">
+                {referenceCount > 0 ? `${referenceCount} reference${referenceCount === 1 ? '' : 's'}` : 'Inspiration, materials, and design references'}
+              </span>
             </span>
           </span>
           <ChevronRight className="h-5 w-5 shrink-0 text-ink-300" />
