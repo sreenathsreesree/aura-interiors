@@ -134,6 +134,31 @@ export function orthoConstrain(origin: Point, pt: Point): Point {
   }
 }
 
+/**
+ * FINAL PERSPECTIVE INTEGRATION — snaps a drag direction (from `origin`) onto
+ * whichever vanishing point's ray it is already closest to, within
+ * `toleranceDeg`. Mirrors orthoConstrain's shape exactly (same "find the
+ * nearest snapped angle, keep the drag distance" approach), just against a
+ * caller-supplied set of ray directions instead of the four/eight ortho
+ * angles. Returns `pt` unchanged when nothing is close enough.
+ */
+export function perspectiveConstrain(origin: Point, pt: Point, vanishingPoints: Point[], toleranceDeg = 6): Point {
+  const dx = pt.x - origin.x
+  const dy = pt.y - origin.y
+  const len = Math.hypot(dx, dy)
+  if (len < 1 || vanishingPoints.length === 0) return pt
+  const angle = Math.atan2(dy, dx)
+  let best: { angle: number; diff: number } | null = null
+  for (const vp of vanishingPoints) {
+    const vAngle = Math.atan2(vp.y - origin.y, vp.x - origin.x)
+    let diff = Math.abs(angle - vAngle)
+    if (diff > Math.PI) diff = 2 * Math.PI - diff
+    if (!best || diff < best.diff) best = { angle: vAngle, diff }
+  }
+  if (!best || best.diff > (toleranceDeg * Math.PI) / 180) return pt
+  return { x: origin.x + Math.cos(best.angle) * len, y: origin.y + Math.sin(best.angle) * len }
+}
+
 export function distance(a: Point, b: Point): number {
   return Math.hypot(b.x - a.x, b.y - a.y)
 }

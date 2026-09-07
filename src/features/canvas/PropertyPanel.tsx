@@ -21,23 +21,27 @@ import {
   FlipVertical2,
   Lock,
   LockOpen,
+  Magnet,
   MapPin,
   MapPinOff,
   Plus,
   Trash2,
+  Upload,
   X,
 } from 'lucide-react'
 import { cn } from '@/lib/cn'
 import { NumberStepper } from '@/components/ui'
 import type { CanvasEngine, CanvasEngineSnapshot } from '@/lib/canvasEngine'
 import { getMaterialById } from '@/data/materials'
+import { fileToDownscaledDataUrl } from '@/lib/imageUtils'
 import { getMaterialThumbnailDataUrl } from '@/lib/materialPatterns'
-import type { CanvasObject } from '@/types/canvas'
+import type { CanvasObject, PerspectiveType } from '@/types/canvas'
 import { formatLength } from '@/lib/units'
 import { AnchoredPopover } from './AnchoredPopover'
 import { ColorPickerContent } from './ColorPicker'
 import { LengthField } from './LengthField'
 import { MaterialPickerContent } from './MaterialPanel'
+import { PERSPECTIVE_TYPE_LABEL } from './PerspectiveTypeSelector'
 
 interface Props {
   engine: CanvasEngine
@@ -77,6 +81,7 @@ export function PropertyPanel({ engine, snapshot, className }: Props) {
 
   return (
     <div className={cn('flex h-full flex-col overflow-y-auto bg-white', className ?? 'w-72 shrink-0 border-l border-ink-100')}>
+      {snapshot.viewId === 'perspective' && snapshot.perspective && <PerspectiveControls engine={engine} snapshot={snapshot} />}
       {selected.length === 0 ? (
         <div className="px-4 py-5 text-sm text-ink-400">Select an object to see its properties.</div>
       ) : (
@@ -529,6 +534,159 @@ function TextExtraControls({ engine, object, unit }: { engine: CanvasEngine; obj
         )}
       </div>
     </div>
+  )
+}
+
+/**
+ * FINAL PERSPECTIVE INTEGRATION — the perspective workspace's dedicated
+ * control panel: type, horizon/vanishing-point numeric fields (in the
+ * project's own unit, via the same LengthField everything else uses),
+ * guide density/visibility, perspective snap, the "viewpoint" convenience
+ * sliders, and reference-image import. Always visible while the Perspective
+ * view is open, above whatever the normal selection-based sections show —
+ * the guides are workspace-level settings, not a property of any one object.
+ */
+function PerspectiveControls({ engine, snapshot }: { engine: CanvasEngine; snapshot: CanvasEngineSnapshot }) {
+  const p = snapshot.perspective!
+  const unit = snapshot.settings.unit
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const [importing, setImporting] = useState(false)
+
+  async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    setImporting(true)
+    try {
+      const dataUrl = await fileToDownscaledDataUrl(file)
+      engine.addReferenceImage(dataUrl)
+    } catch {
+      // An unreadable file just means nothing changes.
+    } finally {
+      setImporting(false)
+    }
+  }
+
+  return (
+    <Section title="Perspective">
+      <div className="flex flex-col gap-3">
+        <div>
+          <p className="mb-1.5 text-xs font-medium text-ink-500">Type</p>
+          <div className="grid grid-cols-3 gap-1.5">
+            {(['1-point', '2-point', '3-point'] as PerspectiveType[]).map((t) => (
+              <button
+                key={t}
+                onClick={() => engine.setPerspectiveType(t)}
+                className={cn(
+                  'h-9 rounded-md border-2 text-xs font-semibold transition-colors',
+                  p.type === t ? 'border-ink-900 bg-ink-900 text-sand-50' : 'border-ink-100 text-ink-600 hover:border-ink-400',
+                )}
+              >
+                {PERSPECTIVE_TYPE_LABEL[t]}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <LengthField label="Horizon Height" unit={unit} valueMm={p.horizonY} onChangeMm={(v) => engine.setHorizonY(v)} />
+
+        <div>
+          <p className="mb-1.5 text-xs font-medium text-ink-500">Vanishing Point 1</p>
+          <div className="grid grid-cols-2 gap-2.5">
+            <LengthField label="X" unit={unit} valueMm={p.vp1.x} onChangeMm={(v) => engine.setVanishingPoint('vp1', { x: v, y: p.vp1.y })} />
+            <LengthField label="Y" unit={unit} valueMm={p.vp1.y} onChangeMm={(v) => engine.setVanishingPoint('vp1', { x: p.vp1.x, y: v })} />
+          </div>
+        </div>
+
+        {p.type !== '1-point' && p.vp2 && (
+          <div>
+            <p className="mb-1.5 text-xs font-medium text-ink-500">Vanishing Point 2</p>
+            <div className="grid grid-cols-2 gap-2.5">
+              <LengthField label="X" unit={unit} valueMm={p.vp2.x} onChangeMm={(v) => engine.setVanishingPoint('vp2', { x: v, y: p.vp2!.y })} />
+              <LengthField label="Y" unit={unit} valueMm={p.vp2.y} onChangeMm={(v) => engine.setVanishingPoint('vp2', { x: p.vp2!.x, y: v })} />
+            </div>
+          </div>
+        )}
+
+        {p.type === '3-point' && p.vp3 && (
+          <div>
+            <p className="mb-1.5 text-xs font-medium text-ink-500">Vertical Vanishing Point</p>
+            <div className="grid grid-cols-2 gap-2.5">
+              <LengthField label="X" unit={unit} valueMm={p.vp3.x} onChangeMm={(v) => engine.setVanishingPoint('vp3', { x: v, y: p.vp3!.y })} />
+              <LengthField label="Y" unit={unit} valueMm={p.vp3.y} onChangeMm={(v) => engine.setVanishingPoint('vp3', { x: p.vp3!.x, y: v })} />
+            </div>
+          </div>
+        )}
+
+        <NumberStepper label="Guide Density" value={p.guideDensity} onChange={(v) => engine.setGuideDensity(v)} step={2} min={4} max={48} />
+
+        <div className="flex gap-1.5">
+          <button
+            onClick={() => engine.toggleShowGuides()}
+            className={cn(
+              'flex h-10 flex-1 items-center justify-center gap-1.5 rounded-md border-2 text-xs font-semibold transition-colors',
+              p.showGuides ? 'border-ink-900 bg-ink-900 text-sand-50' : 'border-ink-100 text-ink-600',
+            )}
+          >
+            {p.showGuides ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
+            {p.showGuides ? 'Hide Guides' : 'Show Guides'}
+          </button>
+          <button
+            onClick={() => engine.togglePerspectiveSnap()}
+            className={cn(
+              'flex h-10 flex-1 items-center justify-center gap-1.5 rounded-md border-2 text-xs font-semibold transition-colors',
+              p.perspectiveSnap ? 'border-ink-900 bg-ink-900 text-sand-50' : 'border-ink-100 text-ink-600',
+            )}
+          >
+            <Magnet className="h-3.5 w-3.5" />
+            Perspective Snap
+          </button>
+        </div>
+
+        <div>
+          <div className="mb-1.5 flex items-center justify-between text-xs font-medium text-ink-500">
+            <span>Horizontal Viewpoint</span>
+          </div>
+          <input
+            type="range"
+            min={-8000}
+            max={8000}
+            step={100}
+            value={p.viewpointX}
+            onChange={(e) => engine.setViewpointX(Number(e.target.value))}
+            className="w-full accent-brass-500"
+          />
+        </div>
+
+        <div>
+          <div className="mb-1.5 flex items-center justify-between text-xs font-medium text-ink-500">
+            <span>Perspective Strength</span>
+            <span className="tabular-nums">{Math.round(p.strength * 100)}%</span>
+          </div>
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.05}
+            value={p.strength}
+            onChange={(e) => engine.setStrength(Number(e.target.value))}
+            className="w-full accent-brass-500"
+          />
+        </div>
+
+        <button
+          type="button"
+          onClick={() => fileInputRef.current?.click()}
+          disabled={importing}
+          className="flex h-11 w-full items-center justify-center gap-2 rounded-md border-2 border-dashed border-ink-200 text-xs font-semibold text-ink-600 transition-colors hover:border-ink-400 disabled:opacity-50"
+        >
+          <Upload className="h-4 w-4" />
+          {importing ? 'Importing…' : 'Add Reference Image'}
+        </button>
+        <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleFile} />
+        <p className="text-xs text-ink-400">Reference images live on their own layer — hide it any time from Layers below.</p>
+      </div>
+    </Section>
   )
 }
 

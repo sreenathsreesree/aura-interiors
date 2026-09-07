@@ -10,6 +10,7 @@ import {
   objectSnapPoints,
   offsetPolygon,
   orthoConstrain,
+  perspectiveConstrain,
   pointInCircle,
   pointInMultiPolygon,
   pointInPolygon,
@@ -36,6 +37,8 @@ import type {
   DrawingSheetMeta,
   FillFit,
   PathVertex,
+  PerspectiveSettings,
+  PerspectiveType,
   Point,
   PreciseCreateSpec,
 } from '@/types/canvas'
@@ -129,10 +132,29 @@ export interface CanvasEngineSnapshot {
   viewId: string
   /** V3D — wall metadata, present only when viewId is an elevation. */
   elevation: CanvasElevationInfo | null
+  /** FINAL PERSPECTIVE INTEGRATION — present only when viewId is 'perspective'. */
+  perspective: PerspectiveSettings | null
 }
 
 function clamp(v: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, v))
+}
+
+/** FINAL PERSPECTIVE INTEGRATION — `n` points spread evenly around a rectangle's perimeter, used as the targets perspective guide rays fan out to. Pure geometry, deterministic for a given rect+n. */
+function perimeterPoints(left: number, top: number, right: number, bottom: number, n: number): Point[] {
+  const w = right - left
+  const h = bottom - top
+  const perimeter = 2 * (w + h)
+  if (perimeter <= 0) return []
+  const pts: Point[] = []
+  for (let i = 0; i < n; i++) {
+    const d = (perimeter * i) / n
+    if (d < w) pts.push({ x: left + d, y: top })
+    else if (d < w + h) pts.push({ x: right, y: top + (d - w) })
+    else if (d < 2 * w + h) pts.push({ x: right - (d - w - h), y: bottom })
+    else pts.push({ x: left, y: bottom - (d - 2 * w - h) })
+  }
+  return pts
 }
 
 function cloneObjects(objects: CanvasObject[]): CanvasObject[] {
@@ -236,6 +258,8 @@ export class CanvasEngine {
   /** V3C Copy Style / Paste Style — visual properties only, kept separate from the geometry clipboard above. */
   private styleClipboard: CopiedStyle | null = null
   private editingTextId: string | null = null
+  /** FINAL PERSPECTIVE INTEGRATION — which perspective handle (a vanishing point or the horizon) is currently being dragged, or null. Never touches doc.objects/history — same "visual construction aid" status as alignment guides. */
+  private perspectiveDrag: 'vp1' | 'vp2' | 'vp3' | 'horizon' | null = null
 
   private listeners = new Set<() => void>()
   private rafScheduled = false
@@ -286,6 +310,7 @@ export class CanvasEngine {
       penDraftVertexCount: this.penDraft?.length ?? 0,
       viewId: this.doc.viewId ?? 'plan',
       elevation: this.doc.elevation ?? null,
+      perspective: this.doc.perspective ?? null,
     }
     return this.snapshotCache
   }
@@ -326,6 +351,7 @@ export class CanvasEngine {
     this.lastMeasurement = null
     this.alignmentGuides = {}
     this.editingTextId = null
+    this.perspectiveDrag = null
     this.notify()
     this.scheduleRender()
   }
@@ -795,6 +821,149 @@ export class CanvasEngine {
   private modeHidesLayer(layer: CanvasLayer | undefined): boolean {
     if ((this.doc.settings.drawingMode ?? 'designer') !== 'presentation') return false
     return layer?.name === 'Annotations' || layer?.name === 'Dimensions'
+  }
+
+  // ---------------------------------------------------- FINAL PERSPECTIVE INTEGRATION
+  /**
+   * All perspective setters below are the same category as setUnit/
+   * toggleGrid/setDrawingMode: pure settings mutations on `doc.perspective`,
+   * never touching doc.objects, so none of them are undo-tracked — dragging
+   * a vanishing point or switching 1/2/3-point is reversible simply by
+   * moving it back, exactly like nudging a ruler. Changing perspective type
+   * only ever ADDS a default vp2/vp3 the first time one is needed; it never
+   * deletes an existing vp2/vp3, so switching 3-point -> 1-point -> 3-point
+   * comes back to where you left it, per the spec's "should update the
+   * guide system without destroying the user's drawing."
+   */
+  setPerspectiveType(type: PerspectiveType) {
+    const p = this.doc.perspective
+    if (!p) return
+    let vp2 = p.vp2
+    let vp3 = p.vp3
+    if ((type === '2-point' || type === '3-point') && !vp2) {
+      const spread = 5000
+      vp2 = { x: p.vp1.x + spread, y: p.horizonY }
+    }
+    if (type === '3-point' && !vp3) {
+      const centerX = vp2 ? (p.vp1.x + vp2.x) / 2 : p.vp1.x
+      vp3 = { x: centerX, y: p.horizonY - 6000 }
+    }
+    this.doc = { ...this.doc, perspective: { ...p, type, vp2, vp3 } }
+    this.notify()
+    this.scheduleRender()
+  }
+
+  setHorizonY(y: number) {
+    if (!this.doc.perspective) return
+    this.doc = { ...this.doc, perspective: { ...this.doc.perspective, horizonY: y } }
+    this.notify()
+    this.scheduleRender()
+  }
+
+  setVanishingPoint(which: 'vp1' | 'vp2' | 'vp3', point: Point) {
+    const p = this.doc.perspective
+    if (!p) return
+    this.doc = { ...this.doc, perspective: { ...p, [which]: point } }
+    this.notify()
+    this.scheduleRender()
+  }
+
+  setGuideDensity(n: number) {
+    if (!this.doc.perspective) return
+    const guideDensity = Math.round(clamp(n, 4, 48))
+    this.doc = { ...this.doc, perspective: { ...this.doc.perspective, guideDensity } }
+    this.notify()
+    this.scheduleRender()
+  }
+
+  toggleShowGuides() {
+    if (!this.doc.perspective) return
+    this.doc = { ...this.doc, perspective: { ...this.doc.perspective, showGuides: !this.doc.perspective.showGuides } }
+    this.notify()
+    this.scheduleRender()
+  }
+
+  togglePerspectiveSnap() {
+    if (!this.doc.perspective) return
+    this.doc = { ...this.doc, perspective: { ...this.doc.perspective, perspectiveSnap: !this.doc.perspective.perspectiveSnap } }
+    this.notify()
+  }
+
+  /**
+   * "Horizontal viewpoint" — a friendlier alternative to dragging vp1/vp2
+   * one at a time: shifts every active vanishing point sideways by the same
+   * amount, so the whole guide fan pans left/right as if the designer
+   * stepped sideways. Direct vanishing-point dragging remains available and
+   * always wins as the ground truth — this is just a convenience nudge.
+   */
+  setViewpointX(x: number) {
+    const p = this.doc.perspective
+    if (!p) return
+    const delta = x - p.viewpointX
+    const vp1 = { x: p.vp1.x + delta, y: p.vp1.y }
+    const vp2 = p.vp2 ? { x: p.vp2.x + delta, y: p.vp2.y } : undefined
+    const vp3 = p.vp3 ? { x: p.vp3.x + delta, y: p.vp3.y } : undefined
+    this.doc = { ...this.doc, perspective: { ...p, vp1, vp2, vp3, viewpointX: x } }
+    this.notify()
+    this.scheduleRender()
+  }
+
+  /**
+   * "Perspective strength" — how sharply lines converge. Only meaningful
+   * once there are two horizontal vanishing points to spread apart (2/3
+   * point); for 1-point it just records the slider's value for later use
+   * without moving the single vp1 relative to itself.
+   */
+  setStrength(v: number) {
+    const p = this.doc.perspective
+    if (!p) return
+    const strength = clamp(v, 0, 1)
+    if (!p.vp2) {
+      this.doc = { ...this.doc, perspective: { ...p, strength } }
+      this.notify()
+      return
+    }
+    const centerX = (p.vp1.x + p.vp2.x) / 2
+    const dist = 500 + (1 - strength) * 10000
+    const vp1 = { x: centerX - dist, y: p.horizonY }
+    const vp2 = { x: centerX + dist, y: p.horizonY }
+    this.doc = { ...this.doc, perspective: { ...p, vp1, vp2, strength } }
+    this.notify()
+    this.scheduleRender()
+  }
+
+  /**
+   * Places a reference/underlay photo as a normal image-fill object on the
+   * document's dedicated 'Reference' layer — reuses the exact same
+   * image-fill infrastructure as V2's custom image fills (downscaled data
+   * URI, fillFit, opacity), just targeted at a fresh object instead of the
+   * current selection. Kept off the drawing layers so "hide the reference
+   * when finished" is one existing layer-visibility toggle, not a special case.
+   */
+  addReferenceImage(dataUrl: string) {
+    if (!this.doc.perspective) return
+    const refLayer = this.doc.layers.find((l) => l.name === 'Reference')
+    if (!refLayer) return
+    const before = this.snapshot()
+    const centerWorld = this.screenToWorld({ x: this.cssWidth / 2, y: this.cssHeight / 2 })
+    const w = 2400
+    const h = 1800
+    const obj = this.baseObject('rectangle', centerWorld.x - w / 2, centerWorld.y - h / 2, w, h)
+    obj.fillType = 'image'
+    obj.imageData = dataUrl
+    obj.fillFit = 'contain'
+    obj.opacity = 0.6
+    obj.strokeEnabled = false
+    obj.layerId = refLayer.id
+    this.doc = {
+      ...this.doc,
+      objects: [...this.doc.objects, obj],
+      perspective: { ...this.doc.perspective, referenceObjectId: obj.id },
+    }
+    this.selection = [obj.id]
+    this.commit(before)
+    this.notify()
+    this.scheduleRender()
   }
 
   // -------------------------------------------------------------- layers
@@ -1432,6 +1601,7 @@ export class CanvasEngine {
     this.penActiveVertexIndex = null
     this.penDrag = null
     this.penDragBefore = null
+    this.perspectiveDrag = null
     this.scheduleRender()
   }
 
@@ -2024,6 +2194,18 @@ export class CanvasEngine {
       return
     }
 
+    // FINAL PERSPECTIVE INTEGRATION — a vanishing point/horizon handle takes
+    // priority over the normal select-tool dispatch below, exactly like the
+    // Pen tool's path-edit handles do, so dragging a guide never gets
+    // mistaken for marquee-selecting whatever's underneath it.
+    if (this.doc.perspective && this.tool === 'select' && this.effectiveShowSelectionChrome()) {
+      const hit = this.hitTestPerspectiveHandle(screenPt)
+      if (hit) {
+        this.perspectiveDrag = hit
+        return
+      }
+    }
+
     if (this.pendingLeaderTextId) {
       const textId = this.pendingLeaderTextId
       this.pendingLeaderTextId = null
@@ -2202,6 +2384,11 @@ export class CanvasEngine {
   }
 
   pointerMove(screenPt: Point) {
+    if (this.perspectiveDrag) {
+      this.pointerMovePerspectiveDrag(screenPt)
+      return
+    }
+
     if (this.penDrag) {
       this.pointerMovePenDrag(screenPt)
       return
@@ -2231,6 +2418,12 @@ export class CanvasEngine {
       let world = this.maybeSnap(worldRaw)
       if (this.doc.settings.ortho && (this.draft.type === 'line' || this.draft.type === 'dimension')) {
         world = orthoConstrain(this.draft.start, world)
+      } else if (this.doc.perspective?.perspectiveSnap && (this.draft.type === 'line' || this.draft.type === 'dimension')) {
+        // Coexists with grid/object/smart-guide snapping (maybeSnap already
+        // ran above) — this only pulls the DIRECTION toward whichever
+        // vanishing point's ray it's already closest to, same "keep the
+        // drag distance, snap the angle" shape as ortho.
+        world = perspectiveConstrain(this.draft.start, world, this.activeVanishingPoints())
       }
       if (this.draft.type === 'freeDraw') {
         const last = this.draft.points[this.draft.points.length - 1]
@@ -2366,6 +2559,11 @@ export class CanvasEngine {
   }
 
   pointerUp(screenPt?: Point) {
+    if (this.perspectiveDrag) {
+      this.perspectiveDrag = null
+      this.notify()
+      return
+    }
     if (this.penDrag) {
       this.commit(this.penDragBefore ?? this.snapshot())
       this.penDrag = null
@@ -2724,12 +2922,14 @@ export class CanvasEngine {
     ctx.setTransform(this.dpr * zoom, 0, 0, this.dpr * zoom, this.dpr * offsetX, this.dpr * offsetY)
 
     if (this.effectiveShowGrid()) this.drawGrid(ctx)
+    this.drawPerspectiveGuideLines(ctx)
     this.drawObjects(ctx)
     this.drawCallouts(ctx)
     this.drawDraft(ctx)
 
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0)
     if (this.effectiveShowSelectionChrome()) this.drawSelectionOverlay(ctx)
+    if (this.effectiveShowSelectionChrome()) this.drawPerspectiveHandles(ctx)
     if (this.effectiveShowDimensions()) this.drawLiveDimensions(ctx)
     this.drawDraftLabel(ctx)
     this.drawMeasure(ctx)
@@ -2959,6 +3159,125 @@ export class CanvasEngine {
     ctx.moveTo(left, 0)
     ctx.lineTo(right, 0)
     ctx.stroke()
+  }
+
+  /** Presentation hides guides entirely (like the grid); Designer/Execution respect the designer's own Show Guides toggle. */
+  private effectiveShowPerspectiveGuides(): boolean {
+    if (!this.doc.perspective) return false
+    if ((this.doc.settings.drawingMode ?? 'designer') === 'presentation') return false
+    return this.doc.perspective.showGuides
+  }
+
+  /** Which vanishing points are actually live for the current perspective type — 1-point uses only vp1, 2/3-point add vp2/vp3 once they exist. Kept as a single source of truth so guide lines, handles, hit-testing and snap all agree. */
+  private activeVanishingPoints(): Point[] {
+    const p = this.doc.perspective
+    if (!p) return []
+    const pts = [p.vp1]
+    if (p.type !== '1-point' && p.vp2) pts.push(p.vp2)
+    if (p.type === '3-point' && p.vp3) pts.push(p.vp3)
+    return pts
+  }
+
+  /**
+   * FINAL PERSPECTIVE INTEGRATION — a lightweight construction-guide
+   * renderer: a horizon line plus rays fanning from each active vanishing
+   * point out to points spread evenly around the visible viewport. This is
+   * deliberately NOT a 3D projection of the drawing — it's the same kind of
+   * hand-drafting aid a designer would sketch with a ruler, just redrawn
+   * live as the horizon/vanishing points are dragged. Pure render overlay:
+   * never written to doc.objects, so it can't corrupt or get tangled up
+   * with the actual drawing.
+   */
+  private drawPerspectiveGuideLines(ctx: CanvasRenderingContext2D) {
+    if (!this.effectiveShowPerspectiveGuides()) return
+    const p = this.doc.perspective!
+    const { zoom, offsetX, offsetY } = this.viewport
+    const left = -offsetX / zoom
+    const top = -offsetY / zoom
+    const right = left + this.cssWidth / zoom
+    const bottom = top + this.cssHeight / zoom
+
+    ctx.save()
+    ctx.strokeStyle = 'rgba(47, 111, 237, 0.6)'
+    ctx.lineWidth = 1.5 / zoom
+    ctx.beginPath()
+    ctx.moveTo(left, p.horizonY)
+    ctx.lineTo(right, p.horizonY)
+    ctx.stroke()
+
+    const perimeter = perimeterPoints(left, top, right, bottom, Math.max(4, p.guideDensity))
+    ctx.strokeStyle = 'rgba(47, 111, 237, 0.22)'
+    ctx.lineWidth = 1 / zoom
+    for (const vp of this.activeVanishingPoints()) {
+      ctx.beginPath()
+      for (const pt of perimeter) {
+        ctx.moveTo(vp.x, vp.y)
+        ctx.lineTo(pt.x, pt.y)
+      }
+      ctx.stroke()
+    }
+    ctx.restore()
+  }
+
+  /** Draggable vanishing-point/horizon handles — screen-space editing chrome, same visibility rule as selection handles (Designer mode only). */
+  private drawPerspectiveHandles(ctx: CanvasRenderingContext2D) {
+    if (!this.doc.perspective) return
+    const p = this.doc.perspective
+    const vps = this.activeVanishingPoints()
+    ctx.save()
+    for (let i = 0; i < vps.length; i++) {
+      const s = this.worldToScreen(vps[i])
+      ctx.fillStyle = i === 2 ? '#e0498a' : '#2f6fed'
+      ctx.beginPath()
+      ctx.arc(s.x, s.y, HANDLE_SCREEN_SIZE / 2, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.strokeStyle = '#ffffff'
+      ctx.lineWidth = 2
+      ctx.stroke()
+    }
+    const horizonScreenY = this.worldToScreen({ x: 0, y: p.horizonY }).y
+    ctx.fillStyle = 'rgba(47, 111, 237, 0.9)'
+    ctx.fillRect(10, horizonScreenY - 3, 26, 6)
+    ctx.restore()
+  }
+
+  /** Hit-tests the perspective handles in screen space — vanishing points as small circles, the horizon as a full-width strip. */
+  private hitTestPerspectiveHandle(screenPt: Point): 'vp1' | 'vp2' | 'vp3' | 'horizon' | null {
+    const p = this.doc.perspective
+    if (!p) return null
+    const hitRadius = HANDLE_SCREEN_SIZE / 2 + HANDLE_HIT_PADDING
+    const candidates: { key: 'vp1' | 'vp2' | 'vp3'; point: Point }[] = [{ key: 'vp1', point: p.vp1 }]
+    if (p.type !== '1-point' && p.vp2) candidates.push({ key: 'vp2', point: p.vp2 })
+    if (p.type === '3-point' && p.vp3) candidates.push({ key: 'vp3', point: p.vp3 })
+    for (const c of candidates) {
+      if (distance(this.worldToScreen(c.point), screenPt) <= hitRadius) return c.key
+    }
+    const horizonScreenY = this.worldToScreen({ x: 0, y: p.horizonY }).y
+    if (Math.abs(screenPt.y - horizonScreenY) <= 10) return 'horizon'
+    return null
+  }
+
+  private pointerMovePerspectiveDrag(screenPt: Point) {
+    const p = this.doc.perspective
+    if (!p || !this.perspectiveDrag) return
+    const worldRaw = this.screenToWorld(screenPt)
+    let next: PerspectiveSettings
+    switch (this.perspectiveDrag) {
+      case 'horizon':
+        next = { ...p, horizonY: worldRaw.y }
+        break
+      case 'vp1':
+        next = { ...p, vp1: worldRaw }
+        break
+      case 'vp2':
+        next = { ...p, vp2: worldRaw }
+        break
+      case 'vp3':
+        next = { ...p, vp3: worldRaw }
+        break
+    }
+    this.doc = { ...this.doc, perspective: next }
+    this.scheduleRender()
   }
 
   private drawObjects(ctx: CanvasRenderingContext2D) {

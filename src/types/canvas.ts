@@ -186,7 +186,7 @@ export interface CanvasLayer {
   order: number
 }
 
-export type CanvasViewMode = 'plan' | 'elevation'
+export type CanvasViewMode = 'plan' | 'elevation' | 'perspective'
 
 /**
  * AURA CANVAS V3D — the three workspace presentation modes. A pure render/UI
@@ -210,6 +210,38 @@ export interface CanvasElevationInfo {
   wallLabel: string
   wallWidthMm: number
   wallHeightMm: number
+}
+
+/**
+ * FINAL PERSPECTIVE INTEGRATION — a lightweight construction-guide system,
+ * not a 3D camera. All positions are world-space mm on the SAME real-world
+ * coordinate system every other view already uses; the guides are a pure
+ * render overlay (see CanvasEngine's drawPerspectiveGuides) and are never
+ * written into doc.objects — switching type/dragging a vanishing point never
+ * touches the drawing underneath.
+ */
+export type PerspectiveType = '1-point' | '2-point' | '3-point'
+
+export interface PerspectiveSettings {
+  type: PerspectiveType
+  /** World-space mm. */
+  horizonY: number
+  /** Primary vanishing point — used by all three perspective types. */
+  vp1: Point
+  /** Right vanishing point — 2-point and 3-point only. */
+  vp2?: Point
+  /** Vertical vanishing point (above for a low viewpoint, below for a high one) — 3-point only. */
+  vp3?: Point
+  showGuides: boolean
+  /** Rays drawn per vanishing point. */
+  guideDensity: number
+  /** A line being drawn near a guide's direction snaps onto it — coexists with grid/object/smart-guide snapping, doesn't replace them. */
+  perspectiveSnap: boolean
+  /** Convenience "camera" sliders — a friendlier way to nudge vp1/vp2 together rather than a real 3D camera. Direct vanishing-point dragging remains the ground truth; these are just presets applied on top. */
+  viewpointX: number
+  strength: number
+  /** Optional reference/underlay photo placed as a normal image-fill object on its own 'Reference' layer — kept out of the actual drawing layers so it's trivial to hide (see canvasStorage's PERSPECTIVE_REFERENCE_LAYER). */
+  referenceObjectId?: string
 }
 
 export type DrawingSheetSize = 'A4' | 'A3'
@@ -272,6 +304,8 @@ export interface CanvasDocument {
   viewId?: string
   /** AURA CANVAS V3D — present only when viewId is a wall elevation. */
   elevation?: CanvasElevationInfo
+  /** FINAL PERSPECTIVE INTEGRATION — present only when viewId is 'perspective'. */
+  perspective?: PerspectiveSettings
   objects: CanvasObject[]
   layers: CanvasLayer[]
   activeLayerId: string

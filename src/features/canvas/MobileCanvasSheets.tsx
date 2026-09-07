@@ -90,6 +90,14 @@ export function MobileToolSheet({ engine, snapshot, open, onClose, currentViewId
                 }}
               />
             ))}
+            <MobileToolChip
+              label="Perspective"
+              active={currentViewId === 'perspective'}
+              onClick={() => {
+                onSwitchView('perspective')
+                onClose()
+              }}
+            />
           </div>
         </div>
 

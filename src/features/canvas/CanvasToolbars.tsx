@@ -66,6 +66,7 @@ import { OffsetPopup } from './OffsetPopup'
 import { UnitSelectorPopover } from './UnitSelector'
 import { WallSelectorPopover } from './ViewSelector'
 import { ModeSelectorPopover, MODE_INFO } from './ModeSelector'
+import { PerspectiveTypeSelector, PERSPECTIVE_TYPE_LABEL } from './PerspectiveTypeSelector'
 
 interface EngineProps {
   engine: CanvasEngine
@@ -101,16 +102,21 @@ export function CanvasTopBar({
 }: EngineProps & CanvasTopBarProps) {
   const [wallPickerOpen, setWallPickerOpen] = useState(false)
   const wallAnchorRef = useRef<HTMLButtonElement>(null)
+  const [perspectivePickerOpen, setPerspectivePickerOpen] = useState(false)
+  const perspectiveAnchorRef = useRef<HTMLButtonElement>(null)
   const [modePickerOpen, setModePickerOpen] = useState(false)
   const modeAnchorRef = useRef<HTMLButtonElement>(null)
 
-  const isElevation = currentViewId !== 'plan'
+  const isElevation = currentViewId.startsWith('wall-')
+  const isPerspective = currentViewId === 'perspective'
   const activeWall = walls.find((w) => `wall-${w.wallIndex}` === currentViewId) ?? null
   const drawingMode = snapshot.settings.drawingMode ?? 'designer'
 
   const contextLine = isElevation
     ? `Elevation · ${activeWall?.wallLabel ?? ''}${activeWall ? ` · ${formatDimension(activeWall.wallWidthMm, snapshot.settings.unit)} × ${formatDimension(activeWall.wallHeightMm, snapshot.settings.unit)}` : ''}`
-    : 'Plan'
+    : isPerspective
+      ? `Perspective · ${PERSPECTIVE_TYPE_LABEL[snapshot.perspective?.type ?? '1-point']}`
+      : 'Plan'
 
   return (
     <div className="flex h-14 shrink-0 items-center gap-2 overflow-x-auto border-b border-ink-800 bg-ink-950 px-3 text-sand-50 no-scrollbar sm:px-4">
@@ -125,7 +131,7 @@ export function CanvasTopBar({
           onClick={() => onSwitchView('plan')}
           className={cn(
             'rounded-full px-3 py-1.5 text-xs font-semibold transition-colors',
-            !isElevation ? 'bg-brass-500 text-ink-950' : 'text-sand-300 hover:text-sand-50',
+            !isElevation && !isPerspective ? 'bg-brass-500 text-ink-950' : 'text-sand-300 hover:text-sand-50',
           )}
         >
           Plan
@@ -150,6 +156,28 @@ export function CanvasTopBar({
             activeWallIndex={activeWall?.wallIndex ?? null}
             onSelect={(wallIndex) => onSwitchView(`wall-${wallIndex}`)}
             onClose={() => setWallPickerOpen(false)}
+            side="left"
+          />
+        )}
+        <button
+          ref={perspectiveAnchorRef}
+          onClick={() => {
+            if (!isPerspective) onSwitchView('perspective')
+            else setPerspectivePickerOpen((v) => !v)
+          }}
+          className={cn(
+            'flex items-center gap-1 rounded-full px-3 py-1.5 text-xs font-semibold transition-colors',
+            isPerspective ? 'bg-brass-500 text-ink-950' : 'text-sand-300 hover:text-sand-50',
+          )}
+        >
+          Perspective{isPerspective && snapshot.perspective ? ` · ${PERSPECTIVE_TYPE_LABEL[snapshot.perspective.type]}` : ''}
+        </button>
+        {perspectivePickerOpen && snapshot.perspective && (
+          <PerspectiveTypeSelector
+            anchorRef={perspectiveAnchorRef}
+            activeType={snapshot.perspective.type}
+            onSelect={(t) => engine.setPerspectiveType(t)}
+            onClose={() => setPerspectivePickerOpen(false)}
             side="left"
           />
         )}

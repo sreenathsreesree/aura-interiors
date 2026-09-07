@@ -1,8 +1,11 @@
 import { generateId } from '@/lib/id'
 import { createDemoCanvasObjects } from '@/lib/canvasDemo'
-import type { CanvasDocument, CanvasElevationInfo, CanvasLayer, CanvasSettings } from '@/types/canvas'
+import type { CanvasDocument, CanvasElevationInfo, CanvasLayer, CanvasSettings, PerspectiveSettings } from '@/types/canvas'
 import { DEFAULT_LAYERS } from '@/types/canvas'
 import type { Room } from '@/types'
+
+/** FINAL PERSPECTIVE INTEGRATION — a dedicated layer for reference/underlay images, kept separate from every drawing layer so it's always trivial to hide without touching the actual design. Only added to a room's Perspective document, per the spec's "dedicated... where appropriate" — Plan/Elevation keep the exact same layer set as before. */
+const PERSPECTIVE_REFERENCE_LAYER = 'Reference'
 
 const STORAGE_PREFIX = 'aura-canvas:'
 const FT_TO_MM = 304.8
@@ -165,6 +168,12 @@ export function getOrCreateRoomView(
   if (viewId === 'plan') {
     return getOrCreateRoomCanvas(projectId, roomId, room.dimensions.lengthFt, room.dimensions.widthFt)
   }
+  if (viewId === 'perspective') {
+    const existingPerspective = loadRoomCanvas(roomId, 'perspective')
+    if (existingPerspective) return existingPerspective
+    const planDoc = loadRoomCanvas(roomId, 'plan')
+    return createPerspectiveDocument(projectId, roomId, planDoc?.settings)
+  }
   const existing = loadRoomCanvas(roomId, viewId)
   if (existing) return existing
   const wallIndex = Number(viewId.replace('wall-', ''))
@@ -172,4 +181,72 @@ export function getOrCreateRoomView(
   const elevation = walls.find((w) => w.wallIndex === wallIndex) ?? walls[0]
   const planDoc = loadRoomCanvas(roomId, 'plan')
   return createElevationDocument(projectId, roomId, elevation, planDoc?.settings)
+}
+
+// ---------------------------------------------------------------- FINAL PERSPECTIVE INTEGRATION
+
+/**
+ * A generic room-scale reference frame (4m wide x 3m tall — roughly a
+ * typical interior wall's proportions) rather than anything derived from a
+ * specific wall: Perspective is a free-standing construction workspace, not
+ * tied to one wall's real dimensions the way an elevation is (spec section
+ * 17 — "Perspective is a dedicated reference/drawing workspace", not an
+ * automatic conversion of Plan/Elevation geometry).
+ */
+const PERSPECTIVE_FRAME_WIDTH_MM = 4000
+const PERSPECTIVE_FRAME_HEIGHT_MM = 3000
+
+function defaultPerspectiveSettings(): PerspectiveSettings {
+  const horizonY = PERSPECTIVE_FRAME_HEIGHT_MM / 2
+  return {
+    type: '1-point',
+    horizonY,
+    vp1: { x: PERSPECTIVE_FRAME_WIDTH_MM / 2, y: horizonY },
+    showGuides: true,
+    guideDensity: 12,
+    perspectiveSnap: true,
+    viewpointX: 0,
+    strength: 0.5,
+  }
+}
+
+function createPerspectiveDocument(projectId: string, roomId: string, seedSettings?: CanvasSettings): CanvasDocument {
+  const layers: CanvasLayer[] = [...DEFAULT_LAYERS, { name: PERSPECTIVE_REFERENCE_LAYER, visible: true, locked: false, order: DEFAULT_LAYERS.length }].map((l) => ({
+    ...l,
+    id: generateId('layer'),
+  }))
+  const archLayer = layers.find((l) => l.name === 'Architecture')?.id ?? layers[0].id
+  const now = new Date().toISOString()
+  return {
+    id: generateId('canvas'),
+    projectId,
+    roomId,
+    viewId: 'perspective',
+    perspective: defaultPerspectiveSettings(),
+    objects: [
+      {
+        id: generateId('obj'),
+        type: 'rectangle',
+        x: 0,
+        y: 0,
+        width: PERSPECTIVE_FRAME_WIDTH_MM,
+        height: PERSPECTIVE_FRAME_HEIGHT_MM,
+        rotation: 0,
+        fillType: 'color',
+        fill: '#f6f1ea',
+        opacity: 1,
+        strokeEnabled: true,
+        stroke: '#948676',
+        strokeWidth: 1,
+        layerId: archLayer,
+        locked: false,
+        visible: true,
+      },
+    ],
+    layers,
+    activeLayerId: layers.find((l) => l.name === 'Furniture')?.id ?? layers[0].id,
+    settings: defaultSettings({ ...seedSettings, viewMode: 'perspective' }),
+    createdAt: now,
+    updatedAt: now,
+  }
 }
