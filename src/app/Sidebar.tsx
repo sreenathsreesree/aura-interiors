@@ -2,6 +2,7 @@ import { NavLink } from 'react-router-dom'
 import { Plus } from 'lucide-react'
 import { cn } from '@/lib/cn'
 import { AuraLogo } from '@/components/brand/AuraLogo'
+import { AccountMenu } from '@/features/auth/AccountMenu'
 import { NAV_ITEMS } from './navItems'
 
 // Primary navigation for tablet portrait and up. Hidden on phones in favor
@@ -42,9 +43,8 @@ export function Sidebar() {
         ))}
       </nav>
 
-      <div className="mt-auto rounded-[--radius-md] bg-sand-100 px-4 py-3.5">
-        <p className="text-xs font-semibold uppercase tracking-wide text-ink-400">Aura Interiors</p>
-        <p className="mt-0.5 text-xs text-ink-500">v1.0 — Foundation</p>
+      <div className="mt-auto">
+        <AccountMenu />
       </div>
     </aside>
   )

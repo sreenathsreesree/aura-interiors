@@ -23,8 +23,9 @@
 // means changing what `dataUrl` points to, not this module's shape.
 
 import type { ProjectReference, SitePhoto } from '@/types'
+import { namespacedKey } from '@/supabase/localNamespace'
 
-const STORAGE_KEY = 'aura-project-media'
+const BASE_STORAGE_KEY = 'aura-project-media'
 
 interface StoredProjectMedia {
   sitePhotos: SitePhoto[]
@@ -37,7 +38,7 @@ function emptyMedia(): StoredProjectMedia {
 
 export function loadProjectMedia(): StoredProjectMedia {
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY)
+    const raw = window.localStorage.getItem(namespacedKey(BASE_STORAGE_KEY))
     if (!raw) return emptyMedia()
     const parsed = JSON.parse(raw) as Partial<StoredProjectMedia>
     return {
@@ -51,7 +52,7 @@ export function loadProjectMedia(): StoredProjectMedia {
 
 export function saveProjectMedia(data: StoredProjectMedia): void {
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(data))
+    window.localStorage.setItem(namespacedKey(BASE_STORAGE_KEY), JSON.stringify(data))
   } catch {
     // Storage can fail (private browsing, quota) — saving is best-effort, same as Canvas.
   }

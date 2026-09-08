@@ -3,6 +3,7 @@ import { createDemoCanvasObjects } from '@/lib/canvasDemo'
 import type { CanvasDocument, CanvasElevationInfo, CanvasLayer, CanvasSettings, PerspectiveSettings } from '@/types/canvas'
 import { DEFAULT_LAYERS } from '@/types/canvas'
 import type { Room } from '@/types'
+import { namespacedKey } from '@/supabase/localNamespace'
 
 /** FINAL PERSPECTIVE INTEGRATION — a dedicated layer for reference/underlay images, kept separate from every drawing layer so it's always trivial to hide without touching the actual design. Only added to a room's Perspective document, per the spec's "dedicated... where appropriate" — Plan/Elevation keep the exact same layer set as before. */
 const PERSPECTIVE_REFERENCE_LAYER = 'Reference'
@@ -18,7 +19,38 @@ const FT_TO_MM = 304.8
  * and without touching a single byte of the existing Plan format.
  */
 function storageKey(roomId: string, viewId: string): string {
-  return viewId === 'plan' ? `${STORAGE_PREFIX}${roomId}` : `${STORAGE_PREFIX}${roomId}:${viewId}`
+  const base = viewId === 'plan' ? `${STORAGE_PREFIX}${roomId}` : `${STORAGE_PREFIX}${roomId}:${viewId}`
+  return namespacedKey(base)
+}
+
+/** Every Canvas localStorage key for a given room (all views) — used by cloud sync/migration to enumerate what exists locally without guessing view ids. */
+export function listLocalCanvasKeysForRoom(roomId: string): string[] {
+  const prefix = namespacedKey(`${STORAGE_PREFIX}${roomId}`)
+  const keys: string[] = []
+  for (let i = 0; i < window.localStorage.length; i++) {
+    const key = window.localStorage.key(i)
+    if (key && (key === prefix || key.startsWith(`${prefix}:`))) keys.push(key)
+  }
+  return keys
+}
+
+/** Every Canvas document currently cached locally, regardless of room — used by cloud sync/migration. */
+export function listAllLocalCanvasDocuments(): CanvasDocument[] {
+  const prefix = namespacedKey(STORAGE_PREFIX)
+  const docs: CanvasDocument[] = []
+  for (let i = 0; i < window.localStorage.length; i++) {
+    const key = window.localStorage.key(i)
+    if (!key || !key.startsWith(prefix)) continue
+    try {
+      const raw = window.localStorage.getItem(key)
+      if (!raw) continue
+      const doc = JSON.parse(raw) as CanvasDocument
+      docs.push(doc.viewId ? doc : { ...doc, viewId: 'plan' })
+    } catch {
+      // Skip anything unreadable rather than failing the whole scan.
+    }
+  }
+  return docs
 }
 
 export function loadRoomCanvas(roomId: string, viewId: string = 'plan'): CanvasDocument | null {

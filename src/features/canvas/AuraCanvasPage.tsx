@@ -4,6 +4,7 @@ import { PenTool, Sliders } from 'lucide-react'
 import { Button, EmptyState } from '@/components/ui'
 import { useAppStore } from '@/store/useAppStore'
 import { computeRoomWalls, getOrCreateRoomCanvas, getOrCreateRoomView, saveRoomCanvas } from '@/lib/canvasStorage'
+import { pushCanvasDocumentNow } from '@/supabase/sync/pushActions'
 import type { CanvasDocument } from '@/types/canvas'
 import { useCanvasEngine } from './useCanvasEngine'
 import { CanvasSurface } from './CanvasSurface'
@@ -36,6 +37,24 @@ export function AuraCanvasPage() {
   }
   const { engine, snapshot } = useCanvasEngine(initialDocRef.current)
 
+  // Cloud Foundation — every existing local save point (Save button, view
+  // switch, and now unmount/navigate-away below) also pushes to Supabase.
+  // saveRoomCanvas() is unchanged local behavior; pushCanvasDocumentNow() is
+  // a no-op when signed out or Supabase isn't configured, so this is a pure
+  // addition, never a change to what already happens locally.
+  function persistCanvas(doc: CanvasDocument) {
+    saveRoomCanvas(doc)
+    pushCanvasDocumentNow(doc)
+  }
+
+  useEffect(() => {
+    // Save-on-leave only (engine is a stable ref, so this effect never
+    // re-runs mid-session) — deliberately not reactive to document changes,
+    // which would turn this into an autosave-on-every-edit effect that
+    // doesn't otherwise exist in this app.
+    return () => persistCanvas(engine.getDocument())
+  }, [engine])
+
   // AURA CANVAS V3D — which of the room's drawings (Plan or a wall
   // elevation) is currently loaded into the ONE shared engine. Switching
   // saves whatever's currently loaded under its own view key, then loads
@@ -47,7 +66,7 @@ export function AuraCanvasPage() {
 
   function switchView(viewId: string) {
     if (!project || !room || viewId === currentViewId) return
-    saveRoomCanvas(engine.getDocument())
+    persistCanvas(engine.getDocument())
     const nextDoc = getOrCreateRoomView(project.id, room.id, viewId, room)
     engine.loadDocument(nextDoc)
     engine.fitToContent()
@@ -125,7 +144,7 @@ export function AuraCanvasPage() {
   }
 
   function handleSave() {
-    saveRoomCanvas(engine.getDocument())
+    persistCanvas(engine.getDocument())
     setJustSaved(true)
     window.setTimeout(() => setJustSaved(false), 1600)
   }

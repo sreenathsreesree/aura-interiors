@@ -3,6 +3,7 @@ import type {
   CatalogueItem,
   Client,
   DriveReference,
+  LocalReference,
   PricingConfig,
   Project,
   ProjectReference,
@@ -23,9 +24,35 @@ import { buildProjectBoqLines } from '@/lib/pricing'
 import { generateQuotationNumber } from '@/lib/quotation'
 import { generateId } from '@/lib/id'
 import { loadProjectMedia, saveProjectMedia } from '@/lib/projectMediaStorage'
+import {
+  deleteReferenceCloud,
+  deleteRoomCloud,
+  deleteSitePhotoCloud,
+  pushCatalogueItem,
+  pushClient,
+  pushNewDriveReference,
+  pushNewLocalReference,
+  pushNewSitePhoto,
+  pushProject,
+  pushQuotation,
+  pushRoom,
+} from '@/supabase/sync/pushActions'
 
 function todayIso(): string {
   return new Date().toISOString().slice(0, 10)
+}
+
+// Small helpers so every room/quotation-mutating action can push its
+// current (post-mutation) shape with one line, instead of repeating a
+// get().rooms.find(...) + pushRoom(...) pair at each call site.
+function syncRoomById(get: () => AppState, roomId: string): void {
+  const room = get().rooms.find((r) => r.id === roomId)
+  if (room) pushRoom(room)
+}
+
+function syncQuotationById(get: () => AppState, quotationId: string): void {
+  const quotation = get().quotations.find((q) => q.id === quotationId)
+  if (quotation) pushQuotation(quotation)
 }
 
 // Read once, synchronously, at module load — mirrors how Canvas documents are
@@ -90,6 +117,18 @@ interface AppState {
     refs: Omit<DriveReference, 'id' | 'projectId' | 'source' | 'addedAt'>[],
   ) => void
   deleteReference: (referenceId: string) => void
+
+  // Cloud sync (see src/supabase/sync) — pull-side hydration only; the push
+  // side happens inline inside the actions above via src/supabase/sync/pushActions.ts.
+  hydrateFromCloud: (data: {
+    clients: Client[]
+    projects: Project[]
+    rooms: Room[]
+    quotations: Quotation[]
+    catalogueItems: CatalogueItem[]
+  }) => void
+  hydrateProjectMediaFromCloud: (sitePhotos: SitePhoto[], references: ProjectReference[]) => void
+  resetToLocalDefaults: () => void
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -108,6 +147,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       createdAt: new Date().toISOString().slice(0, 10),
     }
     set((state) => ({ clients: [newClient, ...state.clients] }))
+    pushClient(newClient)
     return newClient
   },
 
@@ -121,6 +161,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       roomIds: [],
     }
     set((state) => ({ projects: [newProject, ...state.projects] }))
+    pushProject(newProject)
     return newProject
   },
 
@@ -130,6 +171,8 @@ export const useAppStore = create<AppState>((set, get) => ({
         p.id === projectId ? { ...p, pricing: { ...p.pricing, ...updates } } : p,
       ),
     }))
+    const updated = get().projects.find((p) => p.id === projectId)
+    if (updated) pushProject(updated)
   },
 
   addRoom: (projectId, type, name) => {
@@ -154,6 +197,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         p.id === projectId ? { ...p, roomIds: [...p.roomIds, newRoom.id], updatedAt: new Date().toISOString().slice(0, 10) } : p,
       ),
     }))
+    pushRoom(newRoom)
     return newRoom
   },
 
@@ -165,6 +209,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         roomIds: p.roomIds.filter((id) => id !== roomId),
       })),
     }))
+    deleteRoomCloud(roomId)
   },
 
   updateRoomDimensions: (roomId, dimensions) => {
@@ -173,6 +218,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         r.id === roomId ? { ...r, dimensions: { ...r.dimensions, ...dimensions } } : r,
       ),
     }))
+    syncRoomById(get, roomId)
   },
 
   toggleRequirement: (roomId, requirementId) => {
@@ -188,6 +234,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           : r,
       ),
     }))
+    syncRoomById(get, roomId)
   },
 
   addRequirement: (roomId, label) => {
@@ -205,6 +252,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           : r,
       ),
     }))
+    syncRoomById(get, roomId)
   },
 
   addItem: (roomId, item) => {
@@ -215,6 +263,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           : r,
       ),
     }))
+    syncRoomById(get, roomId)
   },
 
   updateItem: (roomId, itemId, updates) => {
@@ -228,6 +277,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           : r,
       ),
     }))
+    syncRoomById(get, roomId)
   },
 
   removeItem: (roomId, itemId) => {
@@ -236,17 +286,20 @@ export const useAppStore = create<AppState>((set, get) => ({
         r.id === roomId ? { ...r, items: r.items.filter((it) => it.id !== itemId) } : r,
       ),
     }))
+    syncRoomById(get, roomId)
   },
 
   markRoomComplete: (roomId, isComplete) => {
     set((state) => ({
       rooms: state.rooms.map((r) => (r.id === roomId ? { ...r, isComplete } : r)),
     }))
+    syncRoomById(get, roomId)
   },
 
   addCatalogueItem: (item) => {
     const newItem: CatalogueItem = { ...item, id: generateId('cat') }
     set((state) => ({ catalogueItems: [newItem, ...state.catalogueItems] }))
+    pushCatalogueItem(newItem)
     return newItem
   },
 
@@ -256,6 +309,8 @@ export const useAppStore = create<AppState>((set, get) => ({
         item.id === itemId ? { ...item, ...updates } : item,
       ),
     }))
+    const updated = get().catalogueItems.find((item) => item.id === itemId)
+    if (updated) pushCatalogueItem(updated)
   },
 
   setCatalogueItemActive: (itemId, isActive) => {
@@ -264,6 +319,8 @@ export const useAppStore = create<AppState>((set, get) => ({
         item.id === itemId ? { ...item, isActive } : item,
       ),
     }))
+    const updated = get().catalogueItems.find((item) => item.id === itemId)
+    if (updated) pushCatalogueItem(updated)
   },
 
   createQuotationFromBoq: (projectId) => {
@@ -320,6 +377,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
 
     set((s) => ({ quotations: [quotation, ...s.quotations] }))
+    pushQuotation(quotation)
     return quotation
   },
 
@@ -329,6 +387,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         q.id === quotationId ? { ...q, ...updates, updatedAt: todayIso() } : q,
       ),
     }))
+    syncQuotationById(get, quotationId)
   },
 
   updateQuotationItem: (quotationId, itemId, updates) => {
@@ -343,6 +402,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           : q,
       ),
     }))
+    syncQuotationById(get, quotationId)
   },
 
   setQuotationRoomIncluded: (quotationId, roomId, isIncluded) => {
@@ -357,6 +417,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           : q,
       ),
     }))
+    syncQuotationById(get, quotationId)
   },
 
   moveQuotationItem: (quotationId, itemId, direction) => {
@@ -371,6 +432,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         return { ...q, items, updatedAt: todayIso() }
       }),
     }))
+    syncQuotationById(get, quotationId)
   },
 
   addSitePhotos: (projectId, photos) => {
@@ -388,6 +450,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       saveProjectMedia({ sitePhotos, references: state.references })
       return { sitePhotos }
     })
+    newPhotos.forEach(pushNewSitePhoto)
   },
 
   deleteSitePhoto: (photoId) => {
@@ -396,11 +459,12 @@ export const useAppStore = create<AppState>((set, get) => ({
       saveProjectMedia({ sitePhotos, references: state.references })
       return { sitePhotos }
     })
+    deleteSitePhotoCloud(photoId)
   },
 
   addLocalReferences: (projectId, refs) => {
     const now = new Date().toISOString()
-    const newRefs: ProjectReference[] = refs.map((r) => ({
+    const newRefs: LocalReference[] = refs.map((r) => ({
       id: generateId('rf'),
       projectId,
       source: 'local',
@@ -413,11 +477,12 @@ export const useAppStore = create<AppState>((set, get) => ({
       saveProjectMedia({ sitePhotos: state.sitePhotos, references })
       return { references }
     })
+    newRefs.forEach(pushNewLocalReference)
   },
 
   addDriveReferences: (projectId, refs) => {
     const now = new Date().toISOString()
-    const newRefs: ProjectReference[] = refs.map((r) => ({
+    const newRefs: DriveReference[] = refs.map((r) => ({
       ...r,
       id: generateId('rf'),
       projectId,
@@ -429,15 +494,38 @@ export const useAppStore = create<AppState>((set, get) => ({
       saveProjectMedia({ sitePhotos: state.sitePhotos, references })
       return { references }
     })
+    newRefs.forEach(pushNewDriveReference)
   },
 
   deleteReference: (referenceId) => {
     // Removes AURA's reference record only — for a Drive reference, the
     // original file in Google Drive is never touched by this action.
+    const removed = get().references.find((r) => r.id === referenceId)
     set((state) => {
       const references = state.references.filter((r) => r.id !== referenceId)
       saveProjectMedia({ sitePhotos: state.sitePhotos, references })
       return { references }
+    })
+    if (removed) deleteReferenceCloud(removed)
+  },
+
+  hydrateFromCloud: ({ clients, projects, rooms, quotations, catalogueItems }) => {
+    set({ clients, projects, rooms, quotations, catalogueItems })
+  },
+
+  hydrateProjectMediaFromCloud: (sitePhotos, references) => {
+    set({ sitePhotos, references })
+    saveProjectMedia({ sitePhotos, references })
+  },
+
+  resetToLocalDefaults: () => {
+    set({
+      clients: SAMPLE_CLIENTS,
+      projects: SAMPLE_PROJECTS,
+      rooms: SAMPLE_ROOMS,
+      quotations: [],
+      catalogueItems: CATALOGUE_ITEMS,
+      ...loadProjectMedia(),
     })
   },
 }))

@@ -14,27 +14,39 @@ import { QuotationBuilderPage } from '@/features/quotation/QuotationBuilderPage'
 import { AuraCanvasPage } from '@/features/canvas/AuraCanvasPage'
 import { SitePhotosPage } from '@/features/media/SitePhotosPage'
 import { ReferencesPage } from '@/features/media/ReferencesPage'
+import { AuthGuard } from '@/features/auth/AuthGuard'
+import { LoginPage } from '@/features/auth/LoginPage'
+import { SignUpPage } from '@/features/auth/SignUpPage'
+import { ForgotPasswordPage } from '@/features/auth/ForgotPasswordPage'
+import { ResetPasswordPage } from '@/features/auth/ResetPasswordPage'
 
 function App() {
   return (
     <Routes>
-      <Route element={<AppLayout />}>
-        <Route path="/" element={<DashboardPage />} />
-        <Route path="/clients" element={<ClientsPage />} />
-        <Route path="/clients/:clientId" element={<ClientDetailPage />} />
-        <Route path="/projects" element={<ProjectsPage />} />
-        <Route path="/projects/:projectId" element={<ProjectDetailPage />} />
-        <Route path="/catalogue" element={<CataloguePage />} />
-      </Route>
+      <Route path="/login" element={<LoginPage />} />
+      <Route path="/signup" element={<SignUpPage />} />
+      <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+      <Route path="/reset-password" element={<ResetPasswordPage />} />
 
-      <Route element={<FocusLayout />}>
-        <Route path="/projects/new" element={<NewProjectPage />} />
-        <Route path="/projects/:projectId/rooms/:roomId" element={<RoomBuilderPage />} />
-        <Route path="/projects/:projectId/boq" element={<BoqPage />} />
-        <Route path="/projects/:projectId/quotation" element={<QuotationBuilderPage />} />
-        <Route path="/projects/:projectId/rooms/:roomId/canvas" element={<AuraCanvasPage />} />
-        <Route path="/projects/:projectId/site-photos" element={<SitePhotosPage />} />
-        <Route path="/projects/:projectId/references" element={<ReferencesPage />} />
+      <Route element={<AuthGuard />}>
+        <Route element={<AppLayout />}>
+          <Route path="/" element={<DashboardPage />} />
+          <Route path="/clients" element={<ClientsPage />} />
+          <Route path="/clients/:clientId" element={<ClientDetailPage />} />
+          <Route path="/projects" element={<ProjectsPage />} />
+          <Route path="/projects/:projectId" element={<ProjectDetailPage />} />
+          <Route path="/catalogue" element={<CataloguePage />} />
+        </Route>
+
+        <Route element={<FocusLayout />}>
+          <Route path="/projects/new" element={<NewProjectPage />} />
+          <Route path="/projects/:projectId/rooms/:roomId" element={<RoomBuilderPage />} />
+          <Route path="/projects/:projectId/boq" element={<BoqPage />} />
+          <Route path="/projects/:projectId/quotation" element={<QuotationBuilderPage />} />
+          <Route path="/projects/:projectId/rooms/:roomId/canvas" element={<AuraCanvasPage />} />
+          <Route path="/projects/:projectId/site-photos" element={<SitePhotosPage />} />
+          <Route path="/projects/:projectId/references" element={<ReferencesPage />} />
+        </Route>
       </Route>
 
       <Route path="*" element={<Navigate to="/" replace />} />
