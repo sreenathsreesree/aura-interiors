@@ -13,6 +13,7 @@ import {
   Check,
   DoorClosed,
   Receipt,
+  Calculator,
 } from 'lucide-react'
 import { Badge, Button, Card, EmptyState, IconButton, NumberStepper } from '@/components/ui'
 import { PricingSummary } from '@/components/pricing/PricingSummary'
@@ -218,6 +219,22 @@ export function RoomBuilderPage() {
                 </span>
               </span>
               <ChevronRight className="h-5 w-5 shrink-0 text-sand-400" />
+            </button>
+
+            <button
+              onClick={() => navigate(`/projects/${project.id}/rooms/${room.id}/tools`)}
+              className="flex w-full items-center justify-between rounded-[--radius-lg] border-2 border-ink-100 bg-white px-5 py-4 text-left transition-colors hover:border-brass-400 hover:bg-brass-500/5"
+            >
+              <span className="flex items-center gap-3">
+                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[--radius-md] bg-brass-500/12 text-brass-600">
+                  <Calculator className="h-5 w-5" />
+                </span>
+                <span>
+                  <span className="block text-sm font-semibold text-ink-900">Interior Tools</span>
+                  <span className="block text-xs text-ink-500">Area, paint, flooring and other calculators for this room</span>
+                </span>
+              </span>
+              <ChevronRight className="h-5 w-5 shrink-0 text-ink-300" />
             </button>
 
             {/* Dimensions */}

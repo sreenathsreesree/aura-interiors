@@ -15,25 +15,35 @@ const UNIT_LABEL: Record<MeasurementUnit, string> = {
   'lump-sum': 'lump sum',
 }
 
+/** Seeds the form's starting values (e.g. from an Interior Tools calculator result) without skipping the catalogue-first flow the way `initialItem` does — the designer can still pick a matching catalogue rate, or leave it for later, exactly as they could without a prefill. */
+interface AddItemPrefill {
+  name: string
+  category: string
+  description?: string
+  unit: MeasurementUnit
+  quantity: number
+}
+
 interface AddItemSheetProps {
   open: boolean
   onClose: () => void
   onSave: (item: Omit<RoomItem, 'id'>) => void
   initialItem?: RoomItem
+  prefill?: AddItemPrefill
 }
 
-export function AddItemSheet({ open, onClose, onSave, initialItem }: AddItemSheetProps) {
+export function AddItemSheet({ open, onClose, onSave, initialItem, prefill }: AddItemSheetProps) {
   const activeCatalogueItems = useAppStore(
     useShallow((s) => s.catalogueItems.filter((c) => c.isActive)),
   )
 
   const [query, setQuery] = useState('')
   const [catalogueItemId, setCatalogueItemId] = useState(initialItem?.catalogueItemId)
-  const [name, setName] = useState(initialItem?.name ?? '')
-  const [category, setCategory] = useState(initialItem?.category ?? 'Custom')
-  const [description, setDescription] = useState(initialItem?.description ?? '')
-  const [unit, setUnit] = useState<MeasurementUnit>(initialItem?.unit ?? 'sqft')
-  const [quantity, setQuantity] = useState(initialItem?.quantity ?? 1)
+  const [name, setName] = useState(initialItem?.name ?? prefill?.name ?? '')
+  const [category, setCategory] = useState(initialItem?.category ?? prefill?.category ?? 'Custom')
+  const [description, setDescription] = useState(initialItem?.description ?? prefill?.description ?? '')
+  const [unit, setUnit] = useState<MeasurementUnit>(initialItem?.unit ?? prefill?.unit ?? 'sqft')
+  const [quantity, setQuantity] = useState(initialItem?.quantity ?? prefill?.quantity ?? 1)
   const [masterRate, setMasterRate] = useState(initialItem?.masterRate ?? 0)
   const [rate, setRate] = useState(initialItem?.rate ?? 0)
   const [showCatalog, setShowCatalog] = useState(!initialItem)
@@ -48,11 +58,11 @@ export function AddItemSheet({ open, onClose, onSave, initialItem }: AddItemShee
   function reset() {
     setQuery('')
     setCatalogueItemId(undefined)
-    setName('')
-    setCategory('Custom')
-    setDescription('')
-    setUnit('sqft')
-    setQuantity(1)
+    setName(prefill?.name ?? '')
+    setCategory(prefill?.category ?? 'Custom')
+    setDescription(prefill?.description ?? '')
+    setUnit(prefill?.unit ?? 'sqft')
+    setQuantity(prefill?.quantity ?? 1)
     setMasterRate(0)
     setRate(0)
     setShowCatalog(true)
@@ -71,7 +81,7 @@ export function AddItemSheet({ open, onClose, onSave, initialItem }: AddItemShee
     setUnit(item.unit)
     setMasterRate(item.defaultRate)
     setRate(item.defaultRate)
-    setQuantity(1)
+    setQuantity(prefill?.quantity ?? 1)
     setShowCatalog(false)
   }
 

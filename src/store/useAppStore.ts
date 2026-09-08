@@ -24,6 +24,8 @@ import { buildProjectBoqLines } from '@/lib/pricing'
 import { generateQuotationNumber } from '@/lib/quotation'
 import { generateId } from '@/lib/id'
 import { loadProjectMedia, saveProjectMedia } from '@/lib/projectMediaStorage'
+import { loadCalculations, saveCalculations } from '@/lib/calculationStorage'
+import type { SavedCalculation } from '@/features/tools/types'
 import {
   deleteReferenceCloud,
   deleteRoomCloud,
@@ -58,6 +60,7 @@ function syncQuotationById(get: () => AppState, quotationId: string): void {
 // Read once, synchronously, at module load — mirrors how Canvas documents are
 // read synchronously on mount (see lib/canvasStorage.ts usage).
 const initialProjectMedia = loadProjectMedia()
+const initialCalculations = loadCalculations()
 
 interface AppState {
   clients: Client[]
@@ -123,6 +126,14 @@ interface AppState {
   ) => void
   deleteReference: (referenceId: string) => void
 
+  // Interior Tools — saved calculations (see lib/calculationStorage.ts).
+  // Local-only for now (Supabase work is paused); the shape already mirrors
+  // Project Media's pattern so cloud sync can be added the same way later
+  // without changing this contract.
+  calculations: SavedCalculation[]
+  saveCalculation: (calculation: Omit<SavedCalculation, 'id' | 'createdAt' | 'updatedAt'>) => SavedCalculation
+  deleteCalculation: (calculationId: string) => void
+
   // Cloud sync (see src/supabase/sync) — pull-side hydration only; the push
   // side happens inline inside the actions above via src/supabase/sync/pushActions.ts.
   hydrateFromCloud: (data: {
@@ -144,6 +155,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   catalogueItems: CATALOGUE_ITEMS,
   sitePhotos: initialProjectMedia.sitePhotos,
   references: initialProjectMedia.references,
+  calculations: initialCalculations,
 
   addClient: (client) => {
     const newClient: Client = {
@@ -532,6 +544,25 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (removed) deleteReferenceCloud(removed)
   },
 
+  saveCalculation: (calculation) => {
+    const now = new Date().toISOString()
+    const saved: SavedCalculation = { ...calculation, id: generateId('calc'), createdAt: now, updatedAt: now }
+    set((state) => {
+      const calculations = [saved, ...state.calculations]
+      saveCalculations(calculations)
+      return { calculations }
+    })
+    return saved
+  },
+
+  deleteCalculation: (calculationId) => {
+    set((state) => {
+      const calculations = state.calculations.filter((c) => c.id !== calculationId)
+      saveCalculations(calculations)
+      return { calculations }
+    })
+  },
+
   hydrateFromCloud: ({ clients, projects, rooms, quotations, catalogueItems }) => {
     set({ clients, projects, rooms, quotations, catalogueItems })
   },
@@ -549,6 +580,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       quotations: [],
       catalogueItems: CATALOGUE_ITEMS,
       ...loadProjectMedia(),
+      calculations: loadCalculations(),
     })
   },
 }))

@@ -1,4 +1,4 @@
-import { LayoutGrid, Users, FolderKanban, LibraryBig } from 'lucide-react'
+import { LayoutGrid, Users, FolderKanban, LibraryBig, Calculator } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 
 export interface NavItem {
@@ -12,4 +12,5 @@ export const NAV_ITEMS: NavItem[] = [
   { to: '/clients', label: 'Clients', icon: Users },
   { to: '/projects', label: 'Projects', icon: FolderKanban },
   { to: '/catalogue', label: 'Catalogue', icon: LibraryBig },
+  { to: '/tools', label: 'Tools', icon: Calculator },
 ]

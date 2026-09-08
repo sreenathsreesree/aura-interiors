@@ -14,6 +14,8 @@ import { QuotationBuilderPage } from '@/features/quotation/QuotationBuilderPage'
 import { AuraCanvasPage } from '@/features/canvas/AuraCanvasPage'
 import { SitePhotosPage } from '@/features/media/SitePhotosPage'
 import { ReferencesPage } from '@/features/media/ReferencesPage'
+import { ToolsHubPage } from '@/features/tools/ToolsHubPage'
+import { CalculatorPage } from '@/features/tools/CalculatorPage'
 import { AuthGuard } from '@/features/auth/AuthGuard'
 import { LoginPage } from '@/features/auth/LoginPage'
 import { SignUpPage } from '@/features/auth/SignUpPage'
@@ -36,6 +38,7 @@ function App() {
           <Route path="/projects" element={<ProjectsPage />} />
           <Route path="/projects/:projectId" element={<ProjectDetailPage />} />
           <Route path="/catalogue" element={<CataloguePage />} />
+          <Route path="/tools" element={<ToolsHubPage />} />
         </Route>
 
         <Route element={<FocusLayout />}>
@@ -46,6 +49,9 @@ function App() {
           <Route path="/projects/:projectId/rooms/:roomId/canvas" element={<AuraCanvasPage />} />
           <Route path="/projects/:projectId/site-photos" element={<SitePhotosPage />} />
           <Route path="/projects/:projectId/references" element={<ReferencesPage />} />
+          <Route path="/tools/:calculatorId" element={<CalculatorPage />} />
+          <Route path="/projects/:projectId/rooms/:roomId/tools" element={<ToolsHubPage />} />
+          <Route path="/projects/:projectId/rooms/:roomId/tools/:calculatorId" element={<CalculatorPage />} />
         </Route>
       </Route>
 
