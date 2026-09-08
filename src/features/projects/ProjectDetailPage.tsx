@@ -11,6 +11,7 @@ import {
   FileText,
   Camera,
   Image as ImageIcon,
+  Pencil,
 } from 'lucide-react'
 import { Avatar, Badge, Button, Card, EmptyState, IconButton } from '@/components/ui'
 import { PricingSummary } from '@/components/pricing/PricingSummary'
@@ -22,6 +23,7 @@ import { quotationPricingBreakdown } from '@/lib/quotation'
 import { PROJECT_STATUS_META, PROJECT_TYPE_LABEL, QUOTATION_STATUS_META } from '@/data/statusMeta'
 import { formatCurrency, formatDate } from '@/lib/format'
 import { RoomTypePickerSheet } from '@/features/rooms/RoomTypePickerSheet'
+import { EditProjectSheet } from './EditProjectSheet'
 import { useState } from 'react'
 
 export function ProjectDetailPage() {
@@ -37,6 +39,7 @@ export function ProjectDetailPage() {
   const createQuotationFromBoq = useAppStore((s) => s.createQuotationFromBoq)
   const [pickerOpen, setPickerOpen] = useState(false)
   const [pricingOpen, setPricingOpen] = useState(false)
+  const [editOpen, setEditOpen] = useState(false)
 
   if (!project) {
     return (
@@ -90,9 +93,12 @@ export function ProjectDetailPage() {
                 </button>
               )}
             </div>
-            <Badge tone={statusMeta.tone} className="shrink-0 self-start">
-              {statusMeta.label}
-            </Badge>
+            <div className="flex shrink-0 items-center gap-2 self-start">
+              <Badge tone={statusMeta.tone}>{statusMeta.label}</Badge>
+              <IconButton label="Edit project" variant="ghost" size="sm" onClick={() => setEditOpen(true)}>
+                <Pencil className="h-4 w-4" />
+              </IconButton>
+            </div>
           </div>
 
           <div className="grid grid-cols-1 gap-3 border-t border-ink-100 pt-4 lg:grid-cols-3">
@@ -311,6 +317,8 @@ export function ProjectDetailPage() {
         onSave={(pricing) => updateProjectPricing(project.id, pricing)}
         subtitle="Applies across every room in this project."
       />
+
+      <EditProjectSheet open={editOpen} onClose={() => setEditOpen(false)} project={project} />
     </div>
   )
 }

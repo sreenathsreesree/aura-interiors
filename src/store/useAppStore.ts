@@ -67,9 +67,14 @@ interface AppState {
 
   // Clients
   addClient: (client: Omit<Client, 'id' | 'createdAt'>) => Client
+  updateClient: (clientId: string, updates: Partial<Omit<Client, 'id' | 'createdAt'>>) => void
 
   // Projects
   addProject: (project: Omit<Project, 'id' | 'createdAt' | 'updatedAt' | 'roomIds'>) => Project
+  updateProject: (
+    projectId: string,
+    updates: Partial<Omit<Project, 'id' | 'clientId' | 'createdAt' | 'updatedAt' | 'roomIds' | 'pricing'>>,
+  ) => void
   updateProjectPricing: (projectId: string, updates: Partial<PricingConfig>) => void
 
   // Rooms
@@ -151,6 +156,14 @@ export const useAppStore = create<AppState>((set, get) => ({
     return newClient
   },
 
+  updateClient: (clientId, updates) => {
+    set((state) => ({
+      clients: state.clients.map((c) => (c.id === clientId ? { ...c, ...updates } : c)),
+    }))
+    const updated = get().clients.find((c) => c.id === clientId)
+    if (updated) pushClient(updated)
+  },
+
   addProject: (project) => {
     const now = new Date().toISOString().slice(0, 10)
     const newProject: Project = {
@@ -163,6 +176,16 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((state) => ({ projects: [newProject, ...state.projects] }))
     pushProject(newProject)
     return newProject
+  },
+
+  updateProject: (projectId, updates) => {
+    set((state) => ({
+      projects: state.projects.map((p) =>
+        p.id === projectId ? { ...p, ...updates, updatedAt: new Date().toISOString().slice(0, 10) } : p,
+      ),
+    }))
+    const updated = get().projects.find((p) => p.id === projectId)
+    if (updated) pushProject(updated)
   },
 
   updateProjectPricing: (projectId, updates) => {

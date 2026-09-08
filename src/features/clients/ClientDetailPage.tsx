@@ -1,11 +1,13 @@
+import { useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, Phone, Mail, MapPin, Plus, FolderKanban } from 'lucide-react'
+import { ArrowLeft, Phone, Mail, MapPin, Pencil, Plus, FolderKanban } from 'lucide-react'
 import { Avatar, Badge, Button, Card, EmptyState, IconButton } from '@/components/ui'
 import { useAppStore } from '@/store/useAppStore'
 import { useShallow } from 'zustand/react/shallow'
 import { CLIENT_STATUS_META } from '@/data/statusMeta'
 import { formatDate } from '@/lib/format'
 import { ProjectCard } from '@/components/project/ProjectCard'
+import { ClientFormSheet } from './ClientFormSheet'
 
 export function ClientDetailPage() {
   const { clientId } = useParams<{ clientId: string }>()
@@ -14,6 +16,7 @@ export function ClientDetailPage() {
   const projects = useAppStore(
     useShallow((s) => s.projects.filter((p) => p.clientId === clientId)),
   )
+  const [editOpen, setEditOpen] = useState(false)
 
   if (!client) {
     return (
@@ -47,6 +50,9 @@ export function ClientDetailPage() {
               <div className="flex flex-wrap items-center gap-2.5">
                 <h1 className="font-display text-2xl font-semibold text-ink-900">{client.name}</h1>
                 <Badge tone={statusMeta.tone}>{statusMeta.label}</Badge>
+                <IconButton label="Edit client" variant="ghost" size="sm" onClick={() => setEditOpen(true)}>
+                  <Pencil className="h-4 w-4" />
+                </IconButton>
               </div>
               <p className="mt-1 text-sm text-ink-500">Client since {formatDate(client.createdAt)}</p>
             </div>
@@ -117,6 +123,8 @@ export function ClientDetailPage() {
           </div>
         )}
       </div>
+
+      <ClientFormSheet open={editOpen} onClose={() => setEditOpen(false)} client={client} />
     </div>
   )
 }

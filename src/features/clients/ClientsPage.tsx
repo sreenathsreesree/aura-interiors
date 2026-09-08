@@ -6,7 +6,7 @@ import { cn } from '@/lib/cn'
 import { useAppStore } from '@/store/useAppStore'
 import { CLIENT_STATUS_META } from '@/data/statusMeta'
 import { formatDate } from '@/lib/format'
-import { AddClientSheet } from './AddClientSheet'
+import { ClientFormSheet } from './ClientFormSheet'
 import type { ClientStatus } from '@/types'
 
 type FilterTab = 'all' | ClientStatus
@@ -154,10 +154,10 @@ export function ClientsPage() {
         )}
       </div>
 
-      <AddClientSheet
+      <ClientFormSheet
         open={addOpen}
         onClose={closeAddSheet}
-        onCreated={(client) => navigate(`/clients/${client.id}`)}
+        onSaved={(client) => navigate(`/clients/${client.id}`)}
       />
     </div>
   )
