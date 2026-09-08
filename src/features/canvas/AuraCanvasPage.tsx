@@ -5,13 +5,16 @@ import { Button, EmptyState } from '@/components/ui'
 import { useAppStore } from '@/store/useAppStore'
 import { computeRoomWalls, getOrCreateRoomCanvas, getOrCreateRoomView, saveRoomCanvas } from '@/lib/canvasStorage'
 import { pushCanvasDocumentNow } from '@/supabase/sync/pushActions'
-import type { CanvasDocument } from '@/types/canvas'
+import type { CanvasDocument, CanvasObject } from '@/types/canvas'
+import { buildCalculatorPrefillInputs, type CanvasMeasurement } from '@/lib/canvasCalculatorAdapter'
+import type { CalculatorId, CanvasCalculatorHandoff } from '@/features/tools/types'
 import { useCanvasEngine } from './useCanvasEngine'
 import { CanvasSurface } from './CanvasSurface'
 import { CanvasTopBar, CanvasLeftToolbar, CanvasBottomBar } from './CanvasToolbars'
 import { DrawingSheetPanel } from './DrawingSheetPanel'
 import { PropertyPanel } from './PropertyPanel'
 import { MobilePropertySheet, MobileToolSheet } from './MobileCanvasSheets'
+import { UseInCalculatorSheet } from './UseInCalculatorSheet'
 
 function isEditableTarget(el: EventTarget | null): boolean {
   if (!(el instanceof HTMLElement)) return false
@@ -78,6 +81,34 @@ export function AuraCanvasPage() {
   const [sheetPanelOpen, setSheetPanelOpen] = useState(false)
   const [justSaved, setJustSaved] = useState(false)
   const isDesignerMode = (snapshot.settings.drawingMode ?? 'designer') === 'designer'
+
+  // AURA CANVAS -> CALCULATOR INTEGRATION — "Use in Calculator" on a
+  // selected object opens this compact picker; choosing one navigates to
+  // that calculator, prefilled via the shared adapter. Purely additive: if
+  // never opened, Canvas behaves exactly as every prior milestone.
+  const [calculatorTarget, setCalculatorTarget] = useState<{ object: CanvasObject; measurement: CanvasMeasurement } | null>(null)
+
+  function handleUseInCalculator(object: CanvasObject, measurement: CanvasMeasurement) {
+    // Avoid stacking two sheets on iPhone/iPad — the Properties sheet this
+    // was tapped from closes as the calculator picker opens.
+    setPropertySheetOpen(false)
+    setCalculatorTarget({ object, measurement })
+  }
+
+  function launchCalculator(calculatorId: CalculatorId) {
+    if (!calculatorTarget) return
+    const prefill = buildCalculatorPrefillInputs(calculatorId, calculatorTarget.measurement)
+    if (!prefill) return
+    persistCanvas(engine.getDocument())
+    const handoff: CanvasCalculatorHandoff = {
+      canvasPrefill: prefill,
+      canvasUnit: snapshot.settings.unit,
+      sourceObjectId: calculatorTarget.object.id,
+      canvasView: currentViewId,
+    }
+    setCalculatorTarget(null)
+    navigate(`/projects/${project!.id}/rooms/${room!.id}/tools/${calculatorId}`, { state: handoff })
+  }
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -210,7 +241,7 @@ export function AuraCanvasPage() {
 
         {isDesignerMode && (
           <div className="hidden md:flex">
-            <PropertyPanel engine={engine} snapshot={snapshot} />
+            <PropertyPanel engine={engine} snapshot={snapshot} onUseInCalculator={handleUseInCalculator} />
           </div>
         )}
       </div>
@@ -226,7 +257,19 @@ export function AuraCanvasPage() {
         walls={walls}
         onSwitchView={switchView}
       />
-      <MobilePropertySheet engine={engine} snapshot={snapshot} open={propertySheetOpen} onClose={() => setPropertySheetOpen(false)} />
+      <MobilePropertySheet
+        engine={engine}
+        snapshot={snapshot}
+        open={propertySheetOpen}
+        onClose={() => setPropertySheetOpen(false)}
+        onUseInCalculator={handleUseInCalculator}
+      />
+      <UseInCalculatorSheet
+        open={calculatorTarget !== null}
+        measurement={calculatorTarget?.measurement ?? null}
+        onClose={() => setCalculatorTarget(null)}
+        onChoose={launchCalculator}
+      />
       <DrawingSheetPanel
         engine={engine}
         snapshot={snapshot}

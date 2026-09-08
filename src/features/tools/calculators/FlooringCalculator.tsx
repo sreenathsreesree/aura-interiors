@@ -9,11 +9,21 @@ import { UnitPicker } from '../components/UnitPicker'
 import { UseRoomDimensionsCard } from '../components/UseRoomDimensionsCard'
 import type { CalculatorComponentProps } from '../types'
 
-export function FlooringCalculator({ roomName, roomLengthMm, roomWidthMm, onBack, onSaveCalculation, onAddToBoq }: CalculatorComponentProps) {
-  const [unit, setUnit] = useState<CanvasUnit>('ft')
+export function FlooringCalculator({
+  roomName,
+  roomLengthMm,
+  roomWidthMm,
+  canvasPrefill,
+  canvasUnit,
+  canvasSourceLabel,
+  onBack,
+  onSaveCalculation,
+  onAddToBoq,
+}: CalculatorComponentProps) {
+  const [unit, setUnit] = useState<CanvasUnit>(canvasUnit ?? 'ft')
   const [tileUnit, setTileUnit] = useState<CanvasUnit>('mm')
-  const [roomLen, setRoomLen] = useState(0)
-  const [roomWid, setRoomWid] = useState(0)
+  const [roomLen, setRoomLen] = useState(() => canvasPrefill?.roomLengthMm ?? 0)
+  const [roomWid, setRoomWid] = useState(() => canvasPrefill?.roomWidthMm ?? 0)
   const [tileLen, setTileLen] = useState(0)
   const [tileWid, setTileWid] = useState(0)
   const [wastagePercent, setWastagePercent] = useState(10)
@@ -70,6 +80,7 @@ export function FlooringCalculator({ roomName, roomLengthMm, roomWidthMm, onBack
       subtitle="Room and tile size to a wastage-adjusted tile count."
       onBack={onBack}
       onReset={reset}
+      sourceLabel={canvasSourceLabel}
       roomContext={
         roomName && roomLengthMm !== undefined && roomWidthMm !== undefined ? (
           <UseRoomDimensionsCard roomName={roomName} lengthMm={roomLengthMm} widthMm={roomWidthMm} unit={unit} onUse={useRoomDimensions} />

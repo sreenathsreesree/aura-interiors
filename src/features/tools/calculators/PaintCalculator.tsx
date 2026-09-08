@@ -13,10 +13,20 @@ import type { CalculatorComponentProps } from '../types'
 // per the milestone's "do not pretend these are manufacturer-certified
 // quantities" instruction. Coverage and wastage are plain editable inputs
 // (defaulted to common values), not hidden assumptions.
-export function PaintCalculator({ roomName, roomLengthMm, roomWidthMm, onBack, onSaveCalculation, onAddToBoq }: CalculatorComponentProps) {
-  const [unit, setUnit] = useState<CanvasUnit>('ft')
-  const [wallLengthMm, setWallLengthMm] = useState(0)
-  const [wallHeightMm, setWallHeightMm] = useState(0)
+export function PaintCalculator({
+  roomName,
+  roomLengthMm,
+  roomWidthMm,
+  canvasPrefill,
+  canvasUnit,
+  canvasSourceLabel,
+  onBack,
+  onSaveCalculation,
+  onAddToBoq,
+}: CalculatorComponentProps) {
+  const [unit, setUnit] = useState<CanvasUnit>(canvasUnit ?? 'ft')
+  const [wallLengthMm, setWallLengthMm] = useState(() => canvasPrefill?.wallLengthMm ?? 0)
+  const [wallHeightMm, setWallHeightMm] = useState(() => canvasPrefill?.wallHeightMm ?? 0)
   const [coats, setCoats] = useState(2)
   const [coveragePerLitreM2, setCoveragePerLitreM2] = useState(10)
   const [wastagePercent, setWastagePercent] = useState(10)
@@ -67,6 +77,7 @@ export function PaintCalculator({ roomName, roomLengthMm, roomWidthMm, onBack, o
       subtitle="Wall area, coats and coverage to an estimated litre quantity."
       onBack={onBack}
       onReset={reset}
+      sourceLabel={canvasSourceLabel}
       roomContext={
         roomName && roomLengthMm !== undefined && roomWidthMm !== undefined ? (
           <UseRoomDimensionsCard roomName={roomName} lengthMm={roomLengthMm} widthMm={roomWidthMm} unit={unit} onUse={useRoomDimensions} />

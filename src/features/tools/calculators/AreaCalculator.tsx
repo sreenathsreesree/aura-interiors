@@ -9,10 +9,20 @@ import { UnitPicker } from '../components/UnitPicker'
 import { UseRoomDimensionsCard } from '../components/UseRoomDimensionsCard'
 import type { CalculatorComponentProps } from '../types'
 
-export function AreaCalculator({ roomName, roomLengthMm, roomWidthMm, onBack, onSaveCalculation, onAddToBoq }: CalculatorComponentProps) {
-  const [unit, setUnit] = useState<CanvasUnit>('ft')
-  const [lengthMm, setLengthMm] = useState(0)
-  const [widthMm, setWidthMm] = useState(0)
+export function AreaCalculator({
+  roomName,
+  roomLengthMm,
+  roomWidthMm,
+  canvasPrefill,
+  canvasUnit,
+  canvasSourceLabel,
+  onBack,
+  onSaveCalculation,
+  onAddToBoq,
+}: CalculatorComponentProps) {
+  const [unit, setUnit] = useState<CanvasUnit>(canvasUnit ?? 'ft')
+  const [lengthMm, setLengthMm] = useState(() => canvasPrefill?.lengthMm ?? 0)
+  const [widthMm, setWidthMm] = useState(() => canvasPrefill?.widthMm ?? 0)
 
   const result = calculateArea({ lengthMm, widthMm })
   const hasInput = lengthMm > 0 && widthMm > 0
@@ -54,6 +64,7 @@ export function AreaCalculator({ roomName, roomLengthMm, roomWidthMm, onBack, on
       subtitle="Length × width, converted across units."
       onBack={onBack}
       onReset={reset}
+      sourceLabel={canvasSourceLabel}
       roomContext={
         roomName && roomLengthMm !== undefined && roomWidthMm !== undefined ? (
           <UseRoomDimensionsCard roomName={roomName} lengthMm={roomLengthMm} widthMm={roomWidthMm} unit={unit} onUse={useRoomDimensions} />

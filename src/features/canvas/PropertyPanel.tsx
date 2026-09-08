@@ -11,6 +11,7 @@ import {
   ArrowDown,
   ArrowUp,
   Bold,
+  Calculator as CalculatorIcon,
   Check,
   ChevronDown,
   ChevronUp,
@@ -37,6 +38,7 @@ import { fileToDownscaledDataUrl } from '@/lib/imageUtils'
 import { getMaterialThumbnailDataUrl } from '@/lib/materialPatterns'
 import type { CanvasObject, PerspectiveType } from '@/types/canvas'
 import { formatLength } from '@/lib/units'
+import { extractCanvasMeasurement, type CanvasMeasurement } from '@/lib/canvasCalculatorAdapter'
 import { AnchoredPopover } from './AnchoredPopover'
 import { ColorPickerContent } from './ColorPicker'
 import { LengthField } from './LengthField'
@@ -47,6 +49,15 @@ interface Props {
   engine: CanvasEngine
   snapshot: CanvasEngineSnapshot
   className?: string
+  /**
+   * AURA CANVAS -> CALCULATOR INTEGRATION — present only when a parent page
+   * wires it up (AuraCanvasPage does). PropertyPanel stays fully agnostic
+   * of calculators otherwise: it only asks the shared adapter whether the
+   * selected object has a usable measurement, and if the caller offers this
+   * callback, shows one generic "Use in Calculator" action. Canvas behaves
+   * exactly as before when this prop is omitted.
+   */
+  onUseInCalculator?: (object: CanvasObject, measurement: CanvasMeasurement) => void
 }
 
 const TYPE_LABEL: Record<string, string> = {
@@ -71,13 +82,14 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   )
 }
 
-export function PropertyPanel({ engine, snapshot, className }: Props) {
+export function PropertyPanel({ engine, snapshot, className, onUseInCalculator }: Props) {
   const [swatchOpen, setSwatchOpen] = useState<'fill' | 'stroke' | null>(null)
   const fillSwatchRef = useRef<HTMLButtonElement>(null)
   const strokeSwatchRef = useRef<HTMLButtonElement>(null)
   const selected = snapshot.selectedObjects
   const single = selected.length === 1 ? selected[0] : null
   const first = selected[0]
+  const measurement = single ? extractCanvasMeasurement(single) : null
 
   return (
     <div className={cn('flex h-full flex-col overflow-y-auto bg-white', className ?? 'w-72 shrink-0 border-l border-ink-100')}>
@@ -148,6 +160,15 @@ export function PropertyPanel({ engine, snapshot, className }: Props) {
                   <div className="col-span-2 rounded-md bg-sand-50 px-3 py-2.5 text-sm font-semibold text-ink-700">
                     Length: {formatLength(single.dimensionValue ?? 0, snapshot.settings.unit)}
                   </div>
+                )}
+                {measurement && onUseInCalculator && (
+                  <button
+                    onClick={() => onUseInCalculator(single, measurement)}
+                    className="col-span-2 flex h-10 items-center justify-center gap-1.5 rounded-md border-2 border-dashed border-brass-400/60 text-xs font-semibold text-brass-700 hover:border-brass-500"
+                  >
+                    <CalculatorIcon className="h-3.5 w-3.5" />
+                    Use in Calculator
+                  </button>
                 )}
               </div>
             )}

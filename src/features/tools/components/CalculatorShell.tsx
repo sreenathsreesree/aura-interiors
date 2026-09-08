@@ -7,6 +7,8 @@ interface CalculatorShellProps {
   subtitle?: string
   onBack: () => void
   onReset: () => void
+  /** AURA CANVAS -> CALCULATOR INTEGRATION — "Project: X · Room: Y · Source: Canvas · View" context line, shown only when opened from a Canvas selection. */
+  sourceLabel?: string
   /** The "Use Room Dimensions" prompt, when opened with room context. */
   roomContext?: ReactNode
   inputs: ReactNode
@@ -19,7 +21,7 @@ interface CalculatorShellProps {
 // card; iPad landscape and up splits into two columns with a sticky live
 // result pane, mirroring how ProjectDetailPage/BoqPage already switch to a
 // two-column layout at the `lg` breakpoint elsewhere in this app.
-export function CalculatorShell({ title, subtitle, onBack, onReset, roomContext, inputs, results, footer }: CalculatorShellProps) {
+export function CalculatorShell({ title, subtitle, onBack, onReset, sourceLabel, roomContext, inputs, results, footer }: CalculatorShellProps) {
   return (
     <div className="flex min-h-dvh flex-col bg-sand-100">
       <div className="flex items-center gap-2 border-b border-ink-100 bg-white px-5 py-4 sm:px-8">
@@ -38,6 +40,11 @@ export function CalculatorShell({ title, subtitle, onBack, onReset, roomContext,
       <div className="flex-1 px-5 py-6 pb-28 sm:px-8 lg:pb-8">
         <div className="mx-auto flex max-w-5xl flex-col gap-5 lg:grid lg:grid-cols-2 lg:items-start lg:gap-6">
           <div className="flex flex-col gap-5">
+            {sourceLabel && (
+              <div className="rounded-[--radius-md] border border-brass-400/40 bg-brass-500/5 px-3.5 py-2.5 text-xs font-medium text-ink-600">
+                {sourceLabel}
+              </div>
+            )}
             {roomContext}
             <Card className="flex flex-col gap-5">{inputs}</Card>
           </div>

@@ -29,7 +29,8 @@ import { cn } from '@/lib/cn'
 import { Sheet } from '@/components/ui'
 import type { CanvasEngine, CanvasEngineSnapshot } from '@/lib/canvasEngine'
 import { getMaterialThumbnailDataUrl } from '@/lib/materialPatterns'
-import type { CanvasElevationInfo } from '@/types/canvas'
+import type { CanvasElevationInfo, CanvasObject } from '@/types/canvas'
+import type { CanvasMeasurement } from '@/lib/canvasCalculatorAdapter'
 import { BOOLEAN_TYPES, DRAW_TOOLS, OFFSET_TYPES } from './CanvasToolbars'
 import { ColorPickerContent } from './ColorPicker'
 import { DuplicateOffsetPopup } from './DuplicateOffsetPopup'
@@ -42,6 +43,8 @@ interface Props {
   snapshot: CanvasEngineSnapshot
   open: boolean
   onClose: () => void
+  /** AURA CANVAS -> CALCULATOR INTEGRATION — forwarded straight through to PropertyPanel; see its own Props doc. */
+  onUseInCalculator?: (object: CanvasObject, measurement: CanvasMeasurement) => void
 }
 
 interface ToolSheetProps extends Props {
@@ -294,10 +297,10 @@ function MobileToolChip({
   )
 }
 
-export function MobilePropertySheet({ engine, snapshot, open, onClose }: Props) {
+export function MobilePropertySheet({ engine, snapshot, open, onClose, onUseInCalculator }: Props) {
   return (
     <Sheet open={open} onClose={onClose} title="Properties">
-      <PropertyPanel engine={engine} snapshot={snapshot} className="w-full" />
+      <PropertyPanel engine={engine} snapshot={snapshot} className="w-full" onUseInCalculator={onUseInCalculator} />
     </Sheet>
   )
 }

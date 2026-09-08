@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { Calculator as CalculatorIcon } from 'lucide-react'
 import { Button, EmptyState } from '@/components/ui'
 import { useAppStore } from '@/store/useAppStore'
@@ -7,7 +7,13 @@ import { unitValueToMm } from '@/lib/units'
 import { AddItemSheet } from '@/features/rooms/AddItemSheet'
 import type { RoomItem } from '@/types'
 import { getCalculatorDefinition } from './registry'
-import type { CalculatorBoqSuggestion, CalculatorComponentProps, CalculatorSavePayload, CalculatorId } from './types'
+import type {
+  CalculatorBoqSuggestion,
+  CalculatorComponentProps,
+  CalculatorSavePayload,
+  CalculatorId,
+  CanvasCalculatorHandoff,
+} from './types'
 import { AreaCalculator } from './calculators/AreaCalculator'
 import { RunningFeetCalculator } from './calculators/RunningFeetCalculator'
 import { PaintCalculator } from './calculators/PaintCalculator'
@@ -33,10 +39,29 @@ const CALCULATOR_COMPONENTS: Partial<Record<CalculatorId, (props: CalculatorComp
 // at all — there's no BOQ to add to without a room.
 export function CalculatorPage() {
   const navigate = useNavigate()
+  const location = useLocation()
   const { projectId, roomId, calculatorId } = useParams<{ projectId?: string; roomId?: string; calculatorId: string }>()
   const room = useAppStore((s) => (roomId ? s.rooms.find((r) => r.id === roomId) : undefined))
+  const project = useAppStore((s) => (projectId ? s.projects.find((p) => p.id === projectId) : undefined))
   const addItem = useAppStore((s) => s.addItem)
   const saveCalculation = useAppStore((s) => s.saveCalculation)
+
+  // AURA CANVAS -> CALCULATOR INTEGRATION — set only when this route was
+  // reached via "Use in Calculator" on a Canvas selection (see
+  // AuraCanvasPage's launchCalculator). Absent on every normal open — a
+  // fresh visit to this same URL, a reload, or opening from the Tools hub
+  // all just mean no canvas prefill, same as before this milestone.
+  const canvasHandoff = location.state as CanvasCalculatorHandoff | undefined
+  const canvasViewLabel = canvasHandoff
+    ? canvasHandoff.canvasView === 'plan'
+      ? 'Plan'
+      : canvasHandoff.canvasView === 'perspective'
+        ? 'Perspective'
+        : `Wall ${canvasHandoff.canvasView.replace('wall-', '')}`
+    : undefined
+  const canvasSourceLabel = canvasHandoff
+    ? [project && `Project: ${project.name}`, room && `Room: ${room.name}`, `Source: Canvas · ${canvasViewLabel}`].filter(Boolean).join(' · ')
+    : undefined
 
   const [boqSuggestion, setBoqSuggestion] = useState<CalculatorBoqSuggestion | null>(null)
   const [boqSheetKey, setBoqSheetKey] = useState(0)
@@ -72,7 +97,13 @@ export function CalculatorPage() {
   const roomWidthMm = room && room.dimensions.widthFt > 0 ? unitValueToMm(room.dimensions.widthFt, 'ft') : undefined
 
   function handleSaveCalculation(payload: CalculatorSavePayload) {
-    saveCalculation({ calculatorId: definition!.id, projectId, roomId, ...payload })
+    saveCalculation({
+      calculatorId: definition!.id,
+      projectId,
+      roomId,
+      source: canvasHandoff ? { sourceType: 'canvas', sourceObjectId: canvasHandoff.sourceObjectId, canvasView: canvasHandoff.canvasView } : undefined,
+      ...payload,
+    })
     setJustSaved(true)
     window.setTimeout(() => setJustSaved(false), 1800)
   }
@@ -94,6 +125,9 @@ export function CalculatorPage() {
         roomName={room?.name}
         roomLengthMm={roomLengthMm}
         roomWidthMm={roomWidthMm}
+        canvasPrefill={canvasHandoff?.canvasPrefill}
+        canvasUnit={canvasHandoff?.canvasUnit}
+        canvasSourceLabel={canvasSourceLabel}
         onBack={handleBack}
         onSaveCalculation={handleSaveCalculation}
         onAddToBoq={roomId ? handleAddToBoq : undefined}

@@ -14,11 +14,21 @@ import type { CalculatorComponentProps } from '../types'
 // structural material schedule (framing, hangers, joints), per the
 // milestone's explicit "keep this practical rather than pretending to
 // produce a complete schedule" instruction.
-export function FalseCeilingCalculator({ roomName, roomLengthMm, roomWidthMm, onBack, onSaveCalculation, onAddToBoq }: CalculatorComponentProps) {
-  const [unit, setUnit] = useState<CanvasUnit>('ft')
+export function FalseCeilingCalculator({
+  roomName,
+  roomLengthMm,
+  roomWidthMm,
+  canvasPrefill,
+  canvasUnit,
+  canvasSourceLabel,
+  onBack,
+  onSaveCalculation,
+  onAddToBoq,
+}: CalculatorComponentProps) {
+  const [unit, setUnit] = useState<CanvasUnit>(canvasUnit ?? 'ft')
   const [boardUnit, setBoardUnit] = useState<CanvasUnit>('mm')
-  const [lengthMm, setLengthMm] = useState(0)
-  const [widthMm, setWidthMm] = useState(0)
+  const [lengthMm, setLengthMm] = useState(() => canvasPrefill?.lengthMm ?? 0)
+  const [widthMm, setWidthMm] = useState(() => canvasPrefill?.widthMm ?? 0)
   const [wastagePercent, setWastagePercent] = useState(10)
   const [boardLengthMm, setBoardLengthMm] = useState(0)
   const [boardWidthMm, setBoardWidthMm] = useState(0)
@@ -68,6 +78,7 @@ export function FalseCeilingCalculator({ roomName, roomLengthMm, roomWidthMm, on
       subtitle="Ceiling area, optional board size and wastage."
       onBack={onBack}
       onReset={reset}
+      sourceLabel={canvasSourceLabel}
       roomContext={
         roomName && roomLengthMm !== undefined && roomWidthMm !== undefined ? (
           <UseRoomDimensionsCard roomName={roomName} lengthMm={roomLengthMm} widthMm={roomWidthMm} unit={unit} onUse={useRoomDimensions} />

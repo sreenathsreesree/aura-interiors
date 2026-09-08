@@ -12,9 +12,19 @@ import type { CalculatorComponentProps } from '../types'
 // A single length in running feet/metres — useful for wardrobes, kitchens,
 // skirting, wall panels, counters and other linear interior work priced by
 // running length rather than area.
-export function RunningFeetCalculator({ roomName, roomLengthMm, roomWidthMm, onBack, onSaveCalculation, onAddToBoq }: CalculatorComponentProps) {
-  const [unit, setUnit] = useState<CanvasUnit>('ft')
-  const [lengthMm, setLengthMm] = useState(0)
+export function RunningFeetCalculator({
+  roomName,
+  roomLengthMm,
+  roomWidthMm,
+  canvasPrefill,
+  canvasUnit,
+  canvasSourceLabel,
+  onBack,
+  onSaveCalculation,
+  onAddToBoq,
+}: CalculatorComponentProps) {
+  const [unit, setUnit] = useState<CanvasUnit>(canvasUnit ?? 'ft')
+  const [lengthMm, setLengthMm] = useState(() => canvasPrefill?.lengthMm ?? 0)
 
   const result = calculateRunningFeet({ lengthMm })
   const hasInput = lengthMm > 0
@@ -54,6 +64,7 @@ export function RunningFeetCalculator({ roomName, roomLengthMm, roomWidthMm, onB
       subtitle="A single length, in running feet and metres."
       onBack={onBack}
       onReset={reset}
+      sourceLabel={canvasSourceLabel}
       roomContext={
         roomName && roomLengthMm !== undefined && roomWidthMm !== undefined ? (
           <UseRoomDimensionsCard roomName={roomName} lengthMm={roomLengthMm} widthMm={roomWidthMm} unit={unit} onUse={useRoomDimensions} />
